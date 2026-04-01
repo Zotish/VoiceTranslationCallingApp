@@ -15,28 +15,12 @@ const ICE_SERVERS = {
   ]
 };
 
-// Language code to BCP-47 mapping for Speech Recognition & TTS
 const LANG_MAP = {
-  'bn': 'bn-BD',
-  'zh': 'zh-CN',
-  'hi': 'hi-IN',
-  'en': 'en-US',
-  'es': 'es-ES',
-  'fr': 'fr-FR',
-  'de': 'de-DE',
-  'ja': 'ja-JP',
-  'ko': 'ko-KR',
-  'ar': 'ar-SA',
-  'pt': 'pt-BR',
-  'ru': 'ru-RU',
-  'tr': 'tr-TR',
-  'th': 'th-TH',
-  'vi': 'vi-VN',
-  'it': 'it-IT',
-  'ms': 'ms-MY',
-  'id': 'id-ID',
-  'ur': 'ur-PK',
-  'ta': 'ta-IN'
+  'bn': 'bn-BD', 'zh': 'zh-CN', 'hi': 'hi-IN', 'en': 'en-US',
+  'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'ja': 'ja-JP',
+  'ko': 'ko-KR', 'ar': 'ar-SA', 'pt': 'pt-BR', 'ru': 'ru-RU',
+  'tr': 'tr-TR', 'th': 'th-TH', 'vi': 'vi-VN', 'it': 'it-IT',
+  'ms': 'ms-MY', 'id': 'id-ID', 'ur': 'ur-PK', 'ta': 'ta-IN'
 };
 
 function getLangCode(lang) {
@@ -54,7 +38,7 @@ export function CallProvider({ children }) {
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [voiceMode, setVoiceMode] = useState('voice'); // 'voice' = TTS only, 'both' = TTS + text
+  const [isVoiceCloned, setIsVoiceCloned] = useState(false);
 
   const peerConnection = useRef(null);
   const localStream = useRef(null);
@@ -62,10 +46,10 @@ export function CallProvider({ children }) {
   const remoteAudioRef = useRef(null);
   const timerRef = useRef(null);
   const recognitionRef = useRef(null);
-  const ttsQueueRef = useRef([]);
-  const isTTSSpeakingRef = useRef(false);
+  const audioQueueRef = useRef([]);
+  const isPlayingRef = useRef(false);
 
-  // Start call timer
+  // Start/stop call timer
   const startTimer = useCallback(() => {
     setCallDuration(0);
     timerRef.current = setInterval(() => {
@@ -80,61 +64,92 @@ export function CallProvider({ children }) {
     }
   }, []);
 
-  // ===== TEXT-TO-SPEECH ENGINE =====
-  // Queue-based TTS so translations play one after another, not overlapping
-  const processQueue = useCallback(() => {
-    if (isTTSSpeakingRef.current || ttsQueueRef.current.length === 0) return;
+  // ===== AUDIO PLAYBACK ENGINE =====
+  // Plays cloned voice (base64 mp3) OR falls back to browser TTS
 
-    const { text, lang } = ttsQueueRef.current.shift();
-    isTTSSpeakingRef.current = true;
+  const processAudioQueue = useCallback(() => {
+    if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
+
+    const item = audioQueueRef.current.shift();
+    isPlayingRef.current = true;
     setIsSpeaking(true);
 
-    // Mute remote raw audio while TTS speaks (so no overlap)
+    // Mute raw WebRTC audio during playback
     if (remoteAudioRef.current) {
       remoteAudioRef.current.volume = 0;
     }
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = getLangCode(lang);
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
-
-    // Try to find a voice that matches the language
-    const voices = window.speechSynthesis.getVoices();
-    const targetLang = getLangCode(lang);
-    const matchingVoice = voices.find(v => v.lang === targetLang) ||
-                          voices.find(v => v.lang.startsWith(lang));
-    if (matchingVoice) {
-      utterance.voice = matchingVoice;
+    if (item.audioBase64) {
+      // PLAY CLONED VOICE (ElevenLabs mp3)
+      playClonedAudio(item.audioBase64).then(() => {
+        isPlayingRef.current = false;
+        setIsSpeaking(false);
+        processAudioQueue();
+      }).catch(() => {
+        // Fallback to browser TTS if audio fails
+        playBrowserTTS(item.text, item.lang).then(() => {
+          isPlayingRef.current = false;
+          setIsSpeaking(false);
+          processAudioQueue();
+        });
+      });
+    } else {
+      // FALLBACK: Browser TTS (generic voice)
+      playBrowserTTS(item.text, item.lang).then(() => {
+        isPlayingRef.current = false;
+        setIsSpeaking(false);
+        processAudioQueue();
+      });
     }
-
-    utterance.onend = () => {
-      isTTSSpeakingRef.current = false;
-      setIsSpeaking(false);
-      // Keep remote audio muted - we only want translated voice
-      processQueue(); // Process next in queue
-    };
-
-    utterance.onerror = () => {
-      isTTSSpeakingRef.current = false;
-      setIsSpeaking(false);
-      processQueue();
-    };
-
-    window.speechSynthesis.speak(utterance);
   }, []);
 
-  const speakText = useCallback((text, lang) => {
-    ttsQueueRef.current.push({ text, lang });
-    processQueue();
-  }, [processQueue]);
+  // Play base64 mp3 audio (cloned voice from ElevenLabs)
+  const playClonedAudio = useCallback((base64Audio) => {
+    return new Promise((resolve, reject) => {
+      try {
+        const audio = new Audio(`data:audio/mpeg;base64,${base64Audio}`);
+        audio.volume = 1.0;
+        audio.onended = resolve;
+        audio.onerror = reject;
+        audio.play().catch(reject);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }, []);
+
+  // Fallback: Browser TTS
+  const playBrowserTTS = useCallback((text, lang) => {
+    return new Promise((resolve) => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = getLangCode(lang);
+      utterance.rate = 1.0;
+      utterance.volume = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const targetLang = getLangCode(lang);
+      const match = voices.find(v => v.lang === targetLang) ||
+                    voices.find(v => v.lang.startsWith(lang));
+      if (match) utterance.voice = match;
+
+      utterance.onend = resolve;
+      utterance.onerror = resolve;
+      window.speechSynthesis.speak(utterance);
+    });
+  }, []);
+
+  // Queue audio for playback
+  const queueAudio = useCallback((text, lang, audioBase64) => {
+    audioQueueRef.current.push({ text, lang, audioBase64 });
+    if (audioBase64) setIsVoiceCloned(true);
+    processAudioQueue();
+  }, [processAudioQueue]);
 
   // ===== SPEECH RECOGNITION =====
   const startSpeechRecognition = useCallback((lang, remoteLang, remoteId) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      console.warn('Speech Recognition not supported in this browser');
+      console.warn('Speech Recognition not supported');
       return;
     }
 
@@ -143,20 +158,16 @@ export function CallProvider({ children }) {
     recognition.interimResults = true;
     recognition.lang = getLangCode(lang);
 
-    recognition.onstart = () => {
-      setIsListening(true);
-    };
+    recognition.onstart = () => setIsListening(true);
 
     recognition.onresult = (event) => {
       const last = event.results[event.results.length - 1];
-
       if (last.isFinal) {
         const text = last[0].transcript.trim();
         if (!text) return;
 
         setTranscripts(prev => [...prev, { type: 'you', text, lang, timestamp: Date.now() }]);
 
-        // Send for translation to the other user
         if (socket) {
           socket.emit('translate-text', {
             text,
@@ -176,10 +187,7 @@ export function CallProvider({ children }) {
 
     recognition.onend = () => {
       setIsListening(false);
-      // Auto-restart if still in call
-      try {
-        recognition.start();
-      } catch (e) { /* ignore */ }
+      try { recognition.start(); } catch (e) { /* ignore */ }
     };
 
     try {
@@ -211,11 +219,10 @@ export function CallProvider({ children }) {
 
     pc.ontrack = (event) => {
       remoteStream.current = event.streams[0];
-      // Connect remote audio but keep MUTED - we play TTS translation instead
       const audio = document.getElementById('remote-audio');
       if (audio) {
         audio.srcObject = event.streams[0];
-        audio.volume = 0; // MUTED! We only play translated TTS voice
+        audio.volume = 0; // MUTED - we play translated voice instead
         remoteAudioRef.current = audio;
       }
     };
@@ -225,14 +232,9 @@ export function CallProvider({ children }) {
   }, [socket]);
 
   const getLocalStream = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      localStream.current = stream;
-      return stream;
-    } catch (err) {
-      console.error('Failed to get local stream:', err);
-      throw err;
-    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    localStream.current = stream;
+    return stream;
   }, []);
 
   // ===== CALL ACTIONS =====
@@ -243,11 +245,11 @@ export function CallProvider({ children }) {
       setRemoteUser(contact);
       setCallState('calling');
       setTranscripts([]);
-      ttsQueueRef.current = [];
+      setIsVoiceCloned(false);
+      audioQueueRef.current = [];
 
       const stream = await getLocalStream();
       const pc = createPeerConnection(contact.userId);
-
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       const offer = await pc.createOffer();
@@ -271,11 +273,11 @@ export function CallProvider({ children }) {
 
     try {
       setCallState('in-call');
-      ttsQueueRef.current = [];
+      setIsVoiceCloned(false);
+      audioQueueRef.current = [];
 
       const stream = await getLocalStream();
       const pc = createPeerConnection(callData.from);
-
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
@@ -297,9 +299,7 @@ export function CallProvider({ children }) {
   }, [socket, user, getLocalStream, createPeerConnection, startTimer, startSpeechRecognition]);
 
   const rejectCall = useCallback((callData) => {
-    if (socket) {
-      socket.emit('call-rejected', { to: callData.from });
-    }
+    if (socket) socket.emit('call-rejected', { to: callData.from });
     setCallState('idle');
     setRemoteUser(null);
   }, [socket]);
@@ -309,7 +309,6 @@ export function CallProvider({ children }) {
       peerConnection.current.close();
       peerConnection.current = null;
     }
-
     if (localStream.current) {
       localStream.current.getTracks().forEach(track => track.stop());
       localStream.current = null;
@@ -318,8 +317,8 @@ export function CallProvider({ children }) {
     stopTimer();
     stopSpeechRecognition();
     window.speechSynthesis.cancel();
-    ttsQueueRef.current = [];
-    isTTSSpeakingRef.current = false;
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
 
     if (socket && remoteUser) {
       socket.emit('call-ended', { to: remoteUser.userId });
@@ -330,6 +329,7 @@ export function CallProvider({ children }) {
     setIsMuted(false);
     setIsSpeaking(false);
     setIsListening(false);
+    setIsVoiceCloned(false);
   }, [socket, remoteUser, stopTimer, stopSpeechRecognition]);
 
   const toggleMute = useCallback(() => {
@@ -361,13 +361,8 @@ export function CallProvider({ children }) {
       }
     });
 
-    socket.on('call-rejected', () => {
-      endCall();
-    });
-
-    socket.on('call-ended', () => {
-      endCall();
-    });
+    socket.on('call-rejected', () => endCall());
+    socket.on('call-ended', () => endCall());
 
     socket.on('ice-candidate', async ({ candidate }) => {
       try {
@@ -379,28 +374,27 @@ export function CallProvider({ children }) {
       }
     });
 
-    // RECEIVE translated text from remote user → SPEAK it in our language
-    socket.on('text-translated', ({ original, translated, fromLang, toLang }) => {
+    // RECEIVE translated text + optional cloned voice audio
+    socket.on('text-translated', ({ original, translated, fromLang, toLang, audio, voiceCloned }) => {
       setTranscripts(prev => [...prev, {
         type: 'remote',
         text: original,
         translated,
         fromLang,
         toLang,
+        voiceCloned: !!voiceCloned,
         timestamp: Date.now()
       }]);
-      // 🔊 SPEAK the translated text in OUR language - this is the key feature!
-      speakText(translated, toLang);
+
+      // Queue audio: cloned voice if available, otherwise browser TTS
+      queueAudio(translated, toLang, audio || null);
     });
 
-    // Confirmation that our text was translated and sent to remote
-    socket.on('translation-sent', ({ original, translated, fromLang, toLang }) => {
+    socket.on('translation-sent', ({ original, translated }) => {
       setTranscripts(prev => {
         const updated = [...prev];
         const lastYou = [...updated].reverse().find(t => t.type === 'you' && t.text === original);
-        if (lastYou) {
-          lastYou.translated = translated;
-        }
+        if (lastYou) lastYou.translated = translated;
         return [...updated];
       });
     });
@@ -420,33 +414,19 @@ export function CallProvider({ children }) {
       socket.off('translation-sent');
       socket.off('call-failed');
     };
-  }, [socket, user, remoteUser, endCall, startTimer, startSpeechRecognition, speakText]);
+  }, [socket, user, remoteUser, endCall, startTimer, startSpeechRecognition, queueAudio]);
 
-  // Load voices on mount (needed for some browsers)
+  // Load browser voices
   useEffect(() => {
     window.speechSynthesis.getVoices();
-    window.speechSynthesis.onvoiceschanged = () => {
-      window.speechSynthesis.getVoices();
-    };
+    window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
   }, []);
 
   const value = {
-    callState,
-    remoteUser,
-    callDuration,
-    transcripts,
-    isMuted,
-    isSpeaking,
-    isListening,
-    voiceMode,
-    setVoiceMode,
-    callUser,
-    acceptCall,
-    rejectCall,
-    endCall,
-    toggleMute,
-    setRemoteUser,
-    setCallState
+    callState, remoteUser, callDuration, transcripts,
+    isMuted, isSpeaking, isListening, isVoiceCloned,
+    callUser, acceptCall, rejectCall, endCall, toggleMute,
+    setRemoteUser, setCallState
   };
 
   return (

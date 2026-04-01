@@ -33,5 +33,13 @@ export const deleteContact = (id) => API.delete(`/contacts/${id}`);
 export const getCallHistory = () => API.get('/calls/history');
 export const logCall = (data) => API.post('/calls/log', data);
 
+// Voice Cloning
+export const uploadVoiceSample = (formData) => API.post('/voice/clone', formData, {
+  headers: { 'Content-Type': 'multipart/form-data' },
+  timeout: 60000 // 60s timeout for upload + cloning
+});
+export const getVoiceStatus = () => API.get('/voice/status');
+export const deleteVoiceClone = () => API.delete('/voice/clone');
+
 export { BACKEND_URL };
 export default API;

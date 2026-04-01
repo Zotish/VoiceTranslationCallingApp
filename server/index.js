@@ -8,18 +8,19 @@ const mongoose = require('mongoose');
 const authRoutes = require('./routes/auth');
 const contactRoutes = require('./routes/contacts');
 const callRoutes = require('./routes/calls');
+const voiceRoutes = require('./routes/voice');
 const { translateText } = require('./services/translation');
+const { generateSpeech } = require('./services/voiceClone');
+const User = require('./models/User');
 
 // MongoDB connection
 async function connectDB() {
   const externalURI = process.env.MONGODB_URI;
 
   if (externalURI) {
-    // Production: use external MongoDB (Atlas)
     await mongoose.connect(externalURI);
     console.log('MongoDB connected (external)');
   } else {
-    // Development: use in-memory MongoDB
     const { MongoMemoryServer } = require('mongodb-memory-server');
     const mongod = await MongoMemoryServer.create();
     await mongoose.connect(mongod.getUri());
@@ -35,14 +36,15 @@ connectDB().catch(err => {
 const app = express();
 const server = http.createServer(app);
 
-// CORS - allow all origins for development and production
+// CORS
 app.use(cors());
 
 const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
-  }
+  },
+  maxHttpBufferSize: 5e6 // 5MB for audio data
 });
 
 app.use(express.json());
@@ -51,6 +53,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/calls', callRoutes);
+app.use('/api/voice', voiceRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -59,15 +62,27 @@ app.get('/api/health', (req, res) => {
 
 // Track online users: userId -> socketId
 const onlineUsers = new Map();
+// Track user voice IDs for quick lookup: userId -> voiceId
+const userVoiceCache = new Map();
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('join', (userId) => {
+  socket.on('join', async (userId) => {
     onlineUsers.set(userId, socket.id);
     socket.userId = userId;
     socket.join(userId);
     io.emit('online-users', Array.from(onlineUsers.keys()));
+
+    // Cache voice ID for this user
+    try {
+      const user = await User.findById(userId);
+      if (user && user.voiceId) {
+        userVoiceCache.set(userId, user.voiceId);
+      }
+    } catch (err) {
+      console.error('Error caching voice:', err.message);
+    }
   });
 
   socket.on('call-user', ({ to, from, callerName, offer, callerLang }) => {
@@ -103,12 +118,39 @@ io.on('connection', (socket) => {
     io.to(to).emit('ice-candidate', { candidate, from: socket.userId });
   });
 
+  // Translation with voice cloning
   socket.on('translate-text', async ({ text, fromLang, toLang, to }) => {
     try {
       const translated = await translateText(text, fromLang, toLang);
-      if (to) {
-        io.to(to).emit('text-translated', { original: text, translated, fromLang, toLang });
+
+      // Try to generate speech with speaker's cloned voice
+      let audioBase64 = null;
+      const speakerVoiceId = userVoiceCache.get(socket.userId);
+
+      if (speakerVoiceId) {
+        try {
+          const audioBuffer = await generateSpeech(translated, speakerVoiceId);
+          if (audioBuffer) {
+            audioBase64 = audioBuffer.toString('base64');
+          }
+        } catch (err) {
+          console.error('Voice generation failed, using browser TTS:', err.message);
+        }
       }
+
+      // Send to receiver with audio if available
+      if (to) {
+        io.to(to).emit('text-translated', {
+          original: text,
+          translated,
+          fromLang,
+          toLang,
+          audio: audioBase64, // base64 mp3 audio or null
+          voiceCloned: !!audioBase64
+        });
+      }
+
+      // Confirmation to sender
       socket.emit('translation-sent', { original: text, translated, fromLang, toLang });
     } catch (err) {
       console.error('Translation error:', err);
@@ -119,6 +161,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     if (socket.userId) {
       onlineUsers.delete(socket.userId);
+      userVoiceCache.delete(socket.userId);
       io.emit('online-users', Array.from(onlineUsers.keys()));
     }
   });

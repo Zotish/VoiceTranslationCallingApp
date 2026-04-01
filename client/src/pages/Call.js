@@ -14,7 +14,7 @@ const LANG_NAMES = {
 function Call() {
   const {
     callState, remoteUser, callDuration, transcripts,
-    isMuted, isSpeaking, isListening, endCall, toggleMute
+    isMuted, isSpeaking, isListening, isVoiceCloned, endCall, toggleMute
   } = useCall();
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -90,7 +90,12 @@ function Call() {
                 <div className="voice-waves speaking-waves">
                   <span></span><span></span><span></span><span></span><span></span>
                 </div>
-                <p className="voice-label">Playing translated voice in {myLang}...</p>
+                <p className="voice-label">
+                  {isVoiceCloned
+                    ? `Playing ${remoteUser?.name}'s cloned voice in ${myLang}...`
+                    : `Playing translated voice in ${myLang}...`
+                  }
+                </p>
               </div>
             )}
 
