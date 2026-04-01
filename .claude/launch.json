@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Backend Server (Express + Socket.IO)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start", "--prefix", "server"],
+      "port": 5001,
+      "autoPort": false
+    },
+    {
+      "name": "Frontend Client (React)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start", "--prefix", "client"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}
