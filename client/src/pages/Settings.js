@@ -153,7 +153,7 @@ function Settings() {
       const ext = recordedBlob.type.includes('webm') ? 'webm' : 'mp4';
       formData.append('voiceSample', recordedBlob, `voice_sample.${ext}`);
 
-      const res = await api.uploadVoiceSample(formData);
+      await api.uploadVoiceSample(formData);
       setVoiceCloned(true);
       showMsg('Voice cloned successfully! Your voice will be used in translated calls.');
     } catch (err) {

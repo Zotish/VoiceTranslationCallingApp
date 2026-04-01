@@ -67,42 +67,6 @@ export function CallProvider({ children }) {
   // ===== AUDIO PLAYBACK ENGINE =====
   // Plays cloned voice (base64 mp3) OR falls back to browser TTS
 
-  const processAudioQueue = useCallback(() => {
-    if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
-
-    const item = audioQueueRef.current.shift();
-    isPlayingRef.current = true;
-    setIsSpeaking(true);
-
-    // Mute raw WebRTC audio during playback
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.volume = 0;
-    }
-
-    if (item.audioBase64) {
-      // PLAY CLONED VOICE (ElevenLabs mp3)
-      playClonedAudio(item.audioBase64).then(() => {
-        isPlayingRef.current = false;
-        setIsSpeaking(false);
-        processAudioQueue();
-      }).catch(() => {
-        // Fallback to browser TTS if audio fails
-        playBrowserTTS(item.text, item.lang).then(() => {
-          isPlayingRef.current = false;
-          setIsSpeaking(false);
-          processAudioQueue();
-        });
-      });
-    } else {
-      // FALLBACK: Browser TTS (generic voice)
-      playBrowserTTS(item.text, item.lang).then(() => {
-        isPlayingRef.current = false;
-        setIsSpeaking(false);
-        processAudioQueue();
-      });
-    }
-  }, []);
-
   // Play base64 mp3 audio (cloned voice from ElevenLabs)
   const playClonedAudio = useCallback((base64Audio) => {
     return new Promise((resolve, reject) => {
@@ -137,6 +101,39 @@ export function CallProvider({ children }) {
       window.speechSynthesis.speak(utterance);
     });
   }, []);
+
+  const processAudioQueue = useCallback(() => {
+    if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
+
+    const item = audioQueueRef.current.shift();
+    isPlayingRef.current = true;
+    setIsSpeaking(true);
+
+    // Mute raw WebRTC audio during playback
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.volume = 0;
+    }
+
+    if (item.audioBase64) {
+      playClonedAudio(item.audioBase64).then(() => {
+        isPlayingRef.current = false;
+        setIsSpeaking(false);
+        processAudioQueue();
+      }).catch(() => {
+        playBrowserTTS(item.text, item.lang).then(() => {
+          isPlayingRef.current = false;
+          setIsSpeaking(false);
+          processAudioQueue();
+        });
+      });
+    } else {
+      playBrowserTTS(item.text, item.lang).then(() => {
+        isPlayingRef.current = false;
+        setIsSpeaking(false);
+        processAudioQueue();
+      });
+    }
+  }, [playClonedAudio, playBrowserTTS]);
 
   // Queue audio for playback
   const queueAudio = useCallback((text, lang, audioBase64) => {
