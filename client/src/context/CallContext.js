@@ -15,21 +15,55 @@ const ICE_SERVERS = {
   ]
 };
 
+// Language code to BCP-47 mapping for Speech Recognition & TTS
+const LANG_MAP = {
+  'bn': 'bn-BD',
+  'zh': 'zh-CN',
+  'hi': 'hi-IN',
+  'en': 'en-US',
+  'es': 'es-ES',
+  'fr': 'fr-FR',
+  'de': 'de-DE',
+  'ja': 'ja-JP',
+  'ko': 'ko-KR',
+  'ar': 'ar-SA',
+  'pt': 'pt-BR',
+  'ru': 'ru-RU',
+  'tr': 'tr-TR',
+  'th': 'th-TH',
+  'vi': 'vi-VN',
+  'it': 'it-IT',
+  'ms': 'ms-MY',
+  'id': 'id-ID',
+  'ur': 'ur-PK',
+  'ta': 'ta-IN'
+};
+
+function getLangCode(lang) {
+  return LANG_MAP[lang] || lang;
+}
+
 export function CallProvider({ children }) {
   const { socket } = useSocket();
   const { user } = useAuth();
 
-  const [callState, setCallState] = useState('idle'); // idle, calling, ringing, in-call
+  const [callState, setCallState] = useState('idle');
   const [remoteUser, setRemoteUser] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [transcripts, setTranscripts] = useState([]);
   const [isMuted, setIsMuted] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceMode, setVoiceMode] = useState('voice'); // 'voice' = TTS only, 'both' = TTS + text
 
   const peerConnection = useRef(null);
   const localStream = useRef(null);
   const remoteStream = useRef(null);
+  const remoteAudioRef = useRef(null);
   const timerRef = useRef(null);
   const recognitionRef = useRef(null);
+  const ttsQueueRef = useRef([]);
+  const isTTSSpeakingRef = useRef(false);
 
   // Start call timer
   const startTimer = useCallback(() => {
@@ -46,26 +80,83 @@ export function CallProvider({ children }) {
     }
   }, []);
 
-  // Speech Recognition setup
+  // ===== TEXT-TO-SPEECH ENGINE =====
+  // Queue-based TTS so translations play one after another, not overlapping
+  const processQueue = useCallback(() => {
+    if (isTTSSpeakingRef.current || ttsQueueRef.current.length === 0) return;
+
+    const { text, lang } = ttsQueueRef.current.shift();
+    isTTSSpeakingRef.current = true;
+    setIsSpeaking(true);
+
+    // Mute remote raw audio while TTS speaks (so no overlap)
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.volume = 0;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = getLangCode(lang);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    // Try to find a voice that matches the language
+    const voices = window.speechSynthesis.getVoices();
+    const targetLang = getLangCode(lang);
+    const matchingVoice = voices.find(v => v.lang === targetLang) ||
+                          voices.find(v => v.lang.startsWith(lang));
+    if (matchingVoice) {
+      utterance.voice = matchingVoice;
+    }
+
+    utterance.onend = () => {
+      isTTSSpeakingRef.current = false;
+      setIsSpeaking(false);
+      // Keep remote audio muted - we only want translated voice
+      processQueue(); // Process next in queue
+    };
+
+    utterance.onerror = () => {
+      isTTSSpeakingRef.current = false;
+      setIsSpeaking(false);
+      processQueue();
+    };
+
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const speakText = useCallback((text, lang) => {
+    ttsQueueRef.current.push({ text, lang });
+    processQueue();
+  }, [processQueue]);
+
+  // ===== SPEECH RECOGNITION =====
   const startSpeechRecognition = useCallback((lang, remoteLang, remoteId) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      console.warn('Speech Recognition not supported');
+      console.warn('Speech Recognition not supported in this browser');
       return;
     }
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.lang = lang === 'bn' ? 'bn-BD' : lang === 'zh' ? 'zh-CN' : lang === 'hi' ? 'hi-IN' : lang;
+    recognition.interimResults = true;
+    recognition.lang = getLangCode(lang);
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
 
     recognition.onresult = (event) => {
       const last = event.results[event.results.length - 1];
-      if (last.isFinal) {
-        const text = last[0].transcript;
-        setTranscripts(prev => [...prev, { type: 'you', text, lang }]);
 
-        // Send for translation
+      if (last.isFinal) {
+        const text = last[0].transcript.trim();
+        if (!text) return;
+
+        setTranscripts(prev => [...prev, { type: 'you', text, lang, timestamp: Date.now() }]);
+
+        // Send for translation to the other user
         if (socket) {
           socket.emit('translate-text', {
             text,
@@ -78,16 +169,17 @@ export function CallProvider({ children }) {
     };
 
     recognition.onerror = (e) => {
-      if (e.error !== 'no-speech') {
+      if (e.error !== 'no-speech' && e.error !== 'aborted') {
         console.error('Speech recognition error:', e.error);
       }
     };
 
     recognition.onend = () => {
-      // Restart if still in call
-      if (callState === 'in-call') {
-        try { recognition.start(); } catch (e) { /* ignore */ }
-      }
+      setIsListening(false);
+      // Auto-restart if still in call
+      try {
+        recognition.start();
+      } catch (e) { /* ignore */ }
     };
 
     try {
@@ -96,7 +188,7 @@ export function CallProvider({ children }) {
     } catch (e) {
       console.error('Failed to start speech recognition:', e);
     }
-  }, [socket, callState]);
+  }, [socket]);
 
   const stopSpeechRecognition = useCallback(() => {
     if (recognitionRef.current) {
@@ -104,18 +196,10 @@ export function CallProvider({ children }) {
       try { recognitionRef.current.stop(); } catch (e) { /* ignore */ }
       recognitionRef.current = null;
     }
+    setIsListening(false);
   }, []);
 
-  // Text-to-speech: speak translated text
-  const speakText = useCallback((text, lang) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang === 'bn' ? 'bn-BD' : lang === 'zh' ? 'zh-CN' : lang === 'hi' ? 'hi-IN' : lang;
-    utterance.rate = 1;
-    utterance.volume = 1;
-    window.speechSynthesis.speak(utterance);
-  }, []);
-
-  // Create peer connection
+  // ===== WEBRTC =====
   const createPeerConnection = useCallback((remoteId) => {
     const pc = new RTCPeerConnection(ICE_SERVERS);
 
@@ -127,10 +211,12 @@ export function CallProvider({ children }) {
 
     pc.ontrack = (event) => {
       remoteStream.current = event.streams[0];
-      // Play remote audio
+      // Connect remote audio but keep MUTED - we play TTS translation instead
       const audio = document.getElementById('remote-audio');
       if (audio) {
         audio.srcObject = event.streams[0];
+        audio.volume = 0; // MUTED! We only play translated TTS voice
+        remoteAudioRef.current = audio;
       }
     };
 
@@ -138,7 +224,6 @@ export function CallProvider({ children }) {
     return pc;
   }, [socket]);
 
-  // Get local audio stream
   const getLocalStream = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -150,7 +235,7 @@ export function CallProvider({ children }) {
     }
   }, []);
 
-  // Initiate call
+  // ===== CALL ACTIONS =====
   const callUser = useCallback(async (contact) => {
     if (!socket || !user) return;
 
@@ -158,6 +243,7 @@ export function CallProvider({ children }) {
       setRemoteUser(contact);
       setCallState('calling');
       setTranscripts([]);
+      ttsQueueRef.current = [];
 
       const stream = await getLocalStream();
       const pc = createPeerConnection(contact.userId);
@@ -180,12 +266,12 @@ export function CallProvider({ children }) {
     }
   }, [socket, user, getLocalStream, createPeerConnection]);
 
-  // Accept incoming call
   const acceptCall = useCallback(async (callData) => {
     if (!socket || !user) return;
 
     try {
       setCallState('in-call');
+      ttsQueueRef.current = [];
 
       const stream = await getLocalStream();
       const pc = createPeerConnection(callData.from);
@@ -210,7 +296,6 @@ export function CallProvider({ children }) {
     }
   }, [socket, user, getLocalStream, createPeerConnection, startTimer, startSpeechRecognition]);
 
-  // Reject call
   const rejectCall = useCallback((callData) => {
     if (socket) {
       socket.emit('call-rejected', { to: callData.from });
@@ -219,7 +304,6 @@ export function CallProvider({ children }) {
     setRemoteUser(null);
   }, [socket]);
 
-  // End call
   const endCall = useCallback(() => {
     if (peerConnection.current) {
       peerConnection.current.close();
@@ -234,6 +318,8 @@ export function CallProvider({ children }) {
     stopTimer();
     stopSpeechRecognition();
     window.speechSynthesis.cancel();
+    ttsQueueRef.current = [];
+    isTTSSpeakingRef.current = false;
 
     if (socket && remoteUser) {
       socket.emit('call-ended', { to: remoteUser.userId });
@@ -242,9 +328,10 @@ export function CallProvider({ children }) {
     setCallState('idle');
     setRemoteUser(null);
     setIsMuted(false);
+    setIsSpeaking(false);
+    setIsListening(false);
   }, [socket, remoteUser, stopTimer, stopSpeechRecognition]);
 
-  // Toggle mute
   const toggleMute = useCallback(() => {
     if (localStream.current) {
       const audioTrack = localStream.current.getAudioTracks()[0];
@@ -255,7 +342,7 @@ export function CallProvider({ children }) {
     }
   }, []);
 
-  // Socket event listeners
+  // ===== SOCKET EVENTS =====
   useEffect(() => {
     if (!socket) return;
 
@@ -292,19 +379,26 @@ export function CallProvider({ children }) {
       }
     });
 
-    // Receive translated text from server
+    // RECEIVE translated text from remote user → SPEAK it in our language
     socket.on('text-translated', ({ original, translated, fromLang, toLang }) => {
-      setTranscripts(prev => [...prev, { type: 'remote', text: original, translated, fromLang, toLang }]);
-      // Speak the translated text in user's language
+      setTranscripts(prev => [...prev, {
+        type: 'remote',
+        text: original,
+        translated,
+        fromLang,
+        toLang,
+        timestamp: Date.now()
+      }]);
+      // 🔊 SPEAK the translated text in OUR language - this is the key feature!
       speakText(translated, toLang);
     });
 
-    socket.on('translation-sent', ({ original, translated }) => {
-      // Update our transcript with translation
+    // Confirmation that our text was translated and sent to remote
+    socket.on('translation-sent', ({ original, translated, fromLang, toLang }) => {
       setTranscripts(prev => {
         const updated = [...prev];
-        const lastYou = updated.filter(t => t.type === 'you').pop();
-        if (lastYou && lastYou.text === original) {
+        const lastYou = [...updated].reverse().find(t => t.type === 'you' && t.text === original);
+        if (lastYou) {
           lastYou.translated = translated;
         }
         return [...updated];
@@ -328,12 +422,24 @@ export function CallProvider({ children }) {
     };
   }, [socket, user, remoteUser, endCall, startTimer, startSpeechRecognition, speakText]);
 
+  // Load voices on mount (needed for some browsers)
+  useEffect(() => {
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.getVoices();
+    };
+  }, []);
+
   const value = {
     callState,
     remoteUser,
     callDuration,
     transcripts,
     isMuted,
+    isSpeaking,
+    isListening,
+    voiceMode,
+    setVoiceMode,
     callUser,
     acceptCall,
     rejectCall,

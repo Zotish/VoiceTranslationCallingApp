@@ -23,8 +23,18 @@ const SUPPORTED_LANGUAGES = {
   ta: { name: 'Tamil', nativeName: 'தமிழ்' }
 };
 
+// Map short codes to Google Translate codes
+const GOOGLE_LANG_MAP = {
+  'zh': 'zh-CN',
+};
+
+function getGoogleLang(lang) {
+  return GOOGLE_LANG_MAP[lang] || lang;
+}
+
 /**
- * Translate text using MyMemory free translation API
+ * Primary: Google Translate (free unofficial endpoint)
+ * Fallback: MyMemory API
  */
 async function translateText(text, fromLang, toLang) {
   if (!text || !fromLang || !toLang) {
@@ -35,22 +45,52 @@ async function translateText(text, fromLang, toLang) {
     return text;
   }
 
+  // Try Google Translate first (better quality)
   try {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${fromLang}|${toLang}`;
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (data.responseStatus === 200 && data.responseData) {
-      return data.responseData.translatedText;
-    }
-
-    // Fallback: return original text with note
-    console.warn('Translation API returned non-200:', data.responseStatus);
-    return text;
+    const result = await googleTranslate(text, fromLang, toLang);
+    if (result) return result;
   } catch (err) {
-    console.error('Translation API error:', err.message);
-    throw err;
+    console.warn('Google Translate failed, trying MyMemory:', err.message);
   }
+
+  // Fallback to MyMemory
+  try {
+    const result = await myMemoryTranslate(text, fromLang, toLang);
+    if (result) return result;
+  } catch (err) {
+    console.error('MyMemory also failed:', err.message);
+  }
+
+  return text; // Return original if all fail
+}
+
+async function googleTranslate(text, fromLang, toLang) {
+  const sl = getGoogleLang(fromLang);
+  const tl = getGoogleLang(toLang);
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`;
+
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0' }
+  });
+
+  if (!response.ok) throw new Error(`Google API status ${response.status}`);
+
+  const data = await response.json();
+  if (data && data[0]) {
+    return data[0].map(item => item[0]).filter(Boolean).join('');
+  }
+  throw new Error('Invalid Google response');
+}
+
+async function myMemoryTranslate(text, fromLang, toLang) {
+  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${fromLang}|${toLang}`;
+  const response = await fetch(url);
+  const data = await response.json();
+
+  if (data.responseStatus === 200 && data.responseData) {
+    return data.responseData.translatedText;
+  }
+  throw new Error('MyMemory returned non-200');
 }
 
 function getSupportedLanguages() {
