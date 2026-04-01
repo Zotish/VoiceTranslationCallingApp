@@ -1,0 +1,30 @@
+{
+  "short_name": "VoiceTranslate",
+  "name": "VoiceTranslate - Real-time Voice Translation Calling",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0a0e17",
+  "background_color": "#0a0e17",
+  "scope": "/",
+  "lang": "en",
+  "categories": ["communication", "utilities"],
+  "description": "Make voice calls with real-time translation. Speak in your language, the other person hears in theirs."
+}
