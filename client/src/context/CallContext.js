@@ -77,48 +77,98 @@ export function CallProvider({ children }) {
   }, []);
 
   // ===== AUDIO PLAYBACK =====
+  // Chrome bug: speechSynthesis.cancel() + immediate speak() = silent
+  // Fix: small delay + retry mechanism
+
   const speakWithTTS = useCallback((text, lang) => {
+    addDebug(`TTS: playing "${text.substring(0, 30)}..." in ${lang}`);
+
     try {
+      // Cancel and wait before speaking (Chrome bug workaround)
       window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = getLangCode(lang);
-      utterance.rate = 1.0;
-      utterance.volume = 1.0;
 
-      const voices = window.speechSynthesis.getVoices();
-      const targetLang = getLangCode(lang);
-      const match = voices.find(v => v.lang === targetLang) ||
-                    voices.find(v => v.lang.startsWith(lang));
-      if (match) utterance.voice = match;
+      // Small delay after cancel to let Chrome reset
+      setTimeout(() => {
+        try {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = getLangCode(lang);
+          utterance.rate = 1.0;
+          utterance.volume = 1.0;
 
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-      setTimeout(() => setIsSpeaking(false), 20000);
+          // Try to find matching voice
+          const voices = window.speechSynthesis.getVoices();
+          const targetLang = getLangCode(lang);
+          const match = voices.find(v => v.lang === targetLang) ||
+                        voices.find(v => v.lang.startsWith(lang)) ||
+                        voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+          if (match) {
+            utterance.voice = match;
+            addDebug(`TTS voice: ${match.name} (${match.lang})`);
+          } else {
+            addDebug(`TTS: no voice found for ${lang}, using default. Available: ${voices.length} voices`);
+          }
 
-      window.speechSynthesis.speak(utterance);
+          utterance.onstart = () => addDebug('TTS: started speaking');
+          utterance.onend = () => {
+            addDebug('TTS: finished');
+            setIsSpeaking(false);
+          };
+          utterance.onerror = (e) => {
+            addDebug(`TTS ERROR: ${e.error}`);
+            setIsSpeaking(false);
+          };
+
+          // Safety timeout
+          setTimeout(() => setIsSpeaking(false), 30000);
+
+          window.speechSynthesis.speak(utterance);
+
+          // Chrome bug: sometimes speak() gets "stuck"
+          // Workaround: pause and resume after small delay
+          setTimeout(() => {
+            if (window.speechSynthesis.paused) {
+              window.speechSynthesis.resume();
+            }
+          }, 100);
+
+        } catch (err) {
+          addDebug(`TTS inner error: ${err.message}`);
+          setIsSpeaking(false);
+        }
+      }, 150); // 150ms delay after cancel
+
     } catch (err) {
-      console.error('TTS failed:', err);
+      addDebug(`TTS error: ${err.message}`);
       setIsSpeaking(false);
     }
-  }, []);
+  }, [addDebug]);
 
   const playTranslatedAudio = useCallback((text, lang, audioBase64) => {
     if (!text) return;
     setIsSpeaking(true);
+    addDebug(`Playing audio for: "${text.substring(0, 30)}..." (${lang})`);
 
     if (audioBase64) {
       try {
         const audio = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
         audio.volume = 1.0;
-        audio.onended = () => setIsSpeaking(false);
-        audio.onerror = () => speakWithTTS(text, lang);
-        audio.play().catch(() => speakWithTTS(text, lang));
+        audio.onended = () => { addDebug('Cloned audio finished'); setIsSpeaking(false); };
+        audio.onerror = () => {
+          addDebug('Cloned audio error, falling back to TTS');
+          speakWithTTS(text, lang);
+        };
+        audio.play().catch(() => {
+          addDebug('Cloned audio play failed, falling back to TTS');
+          speakWithTTS(text, lang);
+        });
         setIsVoiceCloned(true);
         return;
-      } catch (e) { /* fallthrough */ }
+      } catch (e) {
+        addDebug(`Audio error: ${e.message}`);
+      }
     }
     speakWithTTS(text, lang);
-  }, [speakWithTTS]);
+  }, [speakWithTTS, addDebug]);
 
   // ===== SPEECH RECOGNITION =====
   const startSpeechRecognition = useCallback((myLang, targetLang, remoteId) => {
