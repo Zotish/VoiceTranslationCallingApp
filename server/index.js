@@ -11,6 +11,7 @@ const callRoutes = require('./routes/calls');
 const voiceRoutes = require('./routes/voice');
 const { translateText } = require('./services/translation');
 const { generateTTS } = require('./services/tts');
+const { generateSpeech } = require('./services/voiceClone');
 const User = require('./models/User');
 
 // MongoDB connection
@@ -133,23 +134,43 @@ io.on('connection', (socket) => {
     io.to(to).emit('ice-candidate', { candidate, from: socket.userId });
   });
 
-  // Translation + Server-side TTS
+  // Translation + TTS (Cloned Voice > Google TTS fallback)
   socket.on('translate-text', async ({ text, fromLang, toLang, to }) => {
     try {
-      console.log(`🔄 Translate: "${text}" | ${fromLang}→${toLang} | to: ${to}`);
+      console.log(`🔄 Translate: "${text}" | ${fromLang}→${toLang} | from: ${socket.userId} | to: ${to}`);
 
       const translated = await translateText(text, fromLang, toLang);
       console.log(`✅ Translated: "${translated}"`);
 
-      // Generate TTS audio on server (works for ALL languages!)
       let audioBase64 = null;
-      try {
-        audioBase64 = await generateTTS(translated, toLang);
-        if (audioBase64) {
-          console.log(`🔊 TTS audio: ${audioBase64.length} chars`);
+      let voiceCloned = false;
+
+      // 1. Try ElevenLabs cloned voice first (speaker's voice!)
+      const speakerVoiceId = userVoiceCache.get(socket.userId);
+      if (speakerVoiceId) {
+        try {
+          console.log(`🎤 Using cloned voice: ${speakerVoiceId}`);
+          const audioBuffer = await generateSpeech(translated, speakerVoiceId);
+          if (audioBuffer) {
+            audioBase64 = audioBuffer.toString('base64');
+            voiceCloned = true;
+            console.log(`🔊 Cloned voice audio: ${audioBase64.length} chars`);
+          }
+        } catch (err) {
+          console.error('Cloned voice failed:', err.message);
         }
-      } catch (err) {
-        console.error('TTS generation failed:', err.message);
+      }
+
+      // 2. Fallback to Google TTS if no cloned voice
+      if (!audioBase64) {
+        try {
+          audioBase64 = await generateTTS(translated, toLang);
+          if (audioBase64) {
+            console.log(`🔊 Google TTS audio: ${audioBase64.length} chars`);
+          }
+        } catch (err) {
+          console.error('Google TTS failed:', err.message);
+        }
       }
 
       // Send to receiver WITH audio
@@ -159,7 +180,8 @@ io.on('connection', (socket) => {
           translated,
           fromLang,
           toLang,
-          audio: audioBase64
+          audio: audioBase64,
+          voiceCloned
         });
       }
 
