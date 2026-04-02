@@ -10,7 +10,7 @@ const contactRoutes = require('./routes/contacts');
 const callRoutes = require('./routes/calls');
 const voiceRoutes = require('./routes/voice');
 const { translateText } = require('./services/translation');
-const { generateSpeech } = require('./services/voiceClone');
+const { generateTTS } = require('./services/tts');
 const User = require('./models/User');
 
 // MongoDB connection
@@ -133,42 +133,34 @@ io.on('connection', (socket) => {
     io.to(to).emit('ice-candidate', { candidate, from: socket.userId });
   });
 
-  // Translation with voice cloning
+  // Translation + Server-side TTS
   socket.on('translate-text', async ({ text, fromLang, toLang, to }) => {
     try {
-      console.log(`🔄 Translate: "${text}" | ${fromLang}→${toLang} | from: ${socket.userId} | to: ${to}`);
+      console.log(`🔄 Translate: "${text}" | ${fromLang}→${toLang} | to: ${to}`);
 
       const translated = await translateText(text, fromLang, toLang);
       console.log(`✅ Translated: "${translated}"`);
 
-      // Try to generate speech with speaker's cloned voice
+      // Generate TTS audio on server (works for ALL languages!)
       let audioBase64 = null;
-      const speakerVoiceId = userVoiceCache.get(socket.userId);
-      console.log(`🎤 Speaker voice cache: ${speakerVoiceId || 'NOT FOUND'} (userId: ${socket.userId})`);
-
-      if (speakerVoiceId) {
-        try {
-          const audioBuffer = await generateSpeech(translated, speakerVoiceId);
-          if (audioBuffer) {
-            audioBase64 = audioBuffer.toString('base64');
-            console.log(`🔊 Voice generated: ${audioBase64.length} chars base64`);
-          }
-        } catch (err) {
-          console.error('Voice generation failed, using browser TTS:', err.message);
+      try {
+        audioBase64 = await generateTTS(translated, toLang);
+        if (audioBase64) {
+          console.log(`🔊 TTS audio: ${audioBase64.length} chars`);
         }
+      } catch (err) {
+        console.error('TTS generation failed:', err.message);
       }
 
-      // Send to receiver with audio if available
+      // Send to receiver WITH audio
       if (to) {
         io.to(to).emit('text-translated', {
           original: text,
           translated,
           fromLang,
           toLang,
-          audio: audioBase64,
-          voiceCloned: !!audioBase64
+          audio: audioBase64
         });
-        console.log(`📤 Sent translated text to ${to} | audio: ${!!audioBase64}`);
       }
 
       // Confirmation to sender

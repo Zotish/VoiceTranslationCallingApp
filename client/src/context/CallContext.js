@@ -67,100 +67,84 @@ export function CallProvider({ children }) {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }, []);
 
-  // ===== GOOGLE TRANSLATE TTS FALLBACK =====
-  const playGoogleTTS = useCallback((text, lang) => {
-    return new Promise((resolve, reject) => {
-      try {
-        // Google Translate TTS - works for ALL languages
-        const encoded = encodeURIComponent(text.substring(0, 200));
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=${lang}&client=tw-ob`;
-        const audio = new Audio(url);
-        audio.volume = 1.0;
-        audio.onended = () => { addDebug('Google TTS: done'); resolve(); };
-        audio.onerror = () => { addDebug('Google TTS: failed'); reject(); };
-        audio.play().then(() => addDebug('Google TTS: playing')).catch(reject);
-      } catch (e) { reject(e); }
-    });
-  }, [addDebug]);
-
   // ===== TTS QUEUE SYSTEM =====
+  // Server sends audio as base64 - just play it! No browser TTS needed.
   const processNextTTS = useCallback(() => {
     if (isTTSPlayingRef.current || ttsQueueRef.current.length === 0) return;
 
-    const { text, lang } = ttsQueueRef.current.shift();
+    const { text, lang, audioBase64 } = ttsQueueRef.current.shift();
     isTTSPlayingRef.current = true;
     setIsSpeaking(true);
-
-    const langCode = getLangCode(lang);
-    const voices = window.speechSynthesis.getVoices();
-    const match = voices.find(v => v.lang === langCode) ||
-                  voices.find(v => v.lang.startsWith(lang + '-')) ||
-                  voices.find(v => v.lang.startsWith(lang + '_')) ||
-                  voices.find(v => v.lang.toLowerCase().startsWith(lang.toLowerCase()));
 
     const finishTTS = () => {
       isTTSPlayingRef.current = false;
       setIsSpeaking(false);
-      processNextTTS();
+      // Play next in queue
+      setTimeout(() => processNextTTS(), 100);
     };
 
-    if (match) {
-      // Browser has a voice for this language - use native TTS
-      addDebug(`TTS: ${match.name} (${match.lang})`);
+    if (audioBase64) {
+      // SERVER AUDIO - most reliable! Works for ALL languages
+      addDebug(`PLAYING SERVER AUDIO for: "${text.substring(0, 30)}..."`);
       try {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = langCode;
-        utterance.voice = match;
-        utterance.rate = 1.0;
-        utterance.volume = 1.0;
-
-        utterance.onstart = () => addDebug(`TTS PLAYING: "${text.substring(0, 30)}..."`);
-        utterance.onend = () => { addDebug('TTS: done'); finishTTS(); };
-        utterance.onerror = (e) => {
-          addDebug(`TTS ERROR: ${e.error}, trying Google TTS...`);
-          playGoogleTTS(text, lang).then(finishTTS).catch(finishTTS);
+        const audio = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
+        audio.volume = 1.0;
+        audio.onended = () => { addDebug('AUDIO: done ✅'); finishTTS(); };
+        audio.onerror = (e) => {
+          addDebug(`AUDIO ERROR: ${e.message || 'unknown'}, trying browser TTS...`);
+          fallbackBrowserTTS(text, lang, finishTTS);
         };
-
-        window.speechSynthesis.speak(utterance);
-        setTimeout(() => {
-          if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-        }, 200);
+        audio.play().catch((e) => {
+          addDebug(`AUDIO PLAY FAIL: ${e.message}, trying browser TTS...`);
+          fallbackBrowserTTS(text, lang, finishTTS);
+        });
       } catch (err) {
-        addDebug(`TTS fail: ${err.message}`);
-        playGoogleTTS(text, lang).then(finishTTS).catch(finishTTS);
+        addDebug(`AUDIO FAIL: ${err.message}`);
+        fallbackBrowserTTS(text, lang, finishTTS);
       }
     } else {
-      // No native voice - use Google Translate TTS
-      addDebug(`No ${lang} voice found, using Google TTS...`);
-      playGoogleTTS(text, lang).then(finishTTS).catch(() => {
-        // Last resort: try native TTS with default voice
-        addDebug('Google TTS failed, trying default voice...');
-        try {
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.lang = langCode;
-          utterance.rate = 1.0;
-          utterance.volume = 1.0;
-          utterance.onend = () => { addDebug('Default TTS: done'); finishTTS(); };
-          utterance.onerror = () => finishTTS();
-          window.speechSynthesis.speak(utterance);
-        } catch (e) { finishTTS(); }
-      });
+      // No server audio - fallback to browser TTS
+      addDebug('No server audio, using browser TTS...');
+      fallbackBrowserTTS(text, lang, finishTTS);
     }
 
     // Safety timeout
     setTimeout(() => {
       if (isTTSPlayingRef.current) {
-        addDebug('TTS: timeout');
+        addDebug('TTS: timeout, skipping');
         window.speechSynthesis.cancel();
         finishTTS();
       }
     }, 15000);
-  }, [addDebug, playGoogleTTS]);
+  }, [addDebug]);
 
-  const queueTTS = useCallback((text, lang) => {
+  // Browser TTS as last resort
+  const fallbackBrowserTTS = useCallback((text, lang, onDone) => {
+    try {
+      const langCode = getLangCode(lang);
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = langCode;
+      utterance.rate = 1.0;
+      utterance.volume = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const match = voices.find(v => v.lang === langCode) ||
+                    voices.find(v => v.lang.startsWith(lang));
+      if (match) utterance.voice = match;
+
+      utterance.onend = onDone;
+      utterance.onerror = onDone;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      addDebug(`Browser TTS fail: ${e.message}`);
+      onDone();
+    }
+  }, [addDebug]);
+
+  const queueTTS = useCallback((text, lang, audioBase64) => {
     if (!text || !text.trim()) return;
-    addDebug(`QUEUE TTS: "${text.substring(0, 40)}" (${lang})`);
-    ttsQueueRef.current.push({ text, lang });
+    addDebug(`QUEUE TTS: "${text.substring(0, 40)}" (${lang}) audio:${audioBase64 ? 'YES' : 'NO'}`);
+    ttsQueueRef.current.push({ text, lang, audioBase64 });
     processNextTTS();
   }, [addDebug, processNextTTS]);
 
@@ -458,17 +442,17 @@ export function CallProvider({ children }) {
       }
     };
 
-    // RECEIVE translated text from other person
+    // RECEIVE translated text + audio from other person
     const onTextTranslated = ({ original, translated, toLang, audio }) => {
-      addDebugRef.current(`RECEIVED: "${original}" → "${translated}" (${toLang})`);
+      addDebugRef.current(`RECEIVED: "${original}" → "${translated}" (${toLang}) audio:${audio ? 'YES' : 'NO'}`);
 
       setTranscripts(prev => [...prev, {
         type: 'remote', text: original, translated,
         toLang, timestamp: Date.now()
       }]);
 
-      // Queue TTS - will play in order, no canceling!
-      queueTTSRef.current(translated, toLang);
+      // Queue TTS with server audio!
+      queueTTSRef.current(translated, toLang, audio || null);
     };
 
     // Confirm my sent translation
