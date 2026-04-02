@@ -65,6 +65,9 @@ const onlineUsers = new Map();
 // Track user voice IDs for quick lookup: userId -> voiceId
 const userVoiceCache = new Map();
 
+// Expose voice cache globally so routes can update it
+app.set('userVoiceCache', userVoiceCache);
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
@@ -94,8 +97,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('call-accepted', ({ to, answer, accepterLang }) => {
-    io.to(to).emit('call-accepted', { answer, accepterLang });
+  socket.on('call-accepted', ({ to, answer, accepterLang, accepterName }) => {
+    io.to(to).emit('call-accepted', { answer, accepterLang, accepterName });
+    console.log(`📞 Call accepted: ${socket.userId} → ${to} | accepterLang: ${accepterLang}`);
   });
 
   socket.on('call-rejected', ({ to }) => {
@@ -121,17 +125,22 @@ io.on('connection', (socket) => {
   // Translation with voice cloning
   socket.on('translate-text', async ({ text, fromLang, toLang, to }) => {
     try {
+      console.log(`🔄 Translate: "${text}" | ${fromLang}→${toLang} | from: ${socket.userId} | to: ${to}`);
+
       const translated = await translateText(text, fromLang, toLang);
+      console.log(`✅ Translated: "${translated}"`);
 
       // Try to generate speech with speaker's cloned voice
       let audioBase64 = null;
       const speakerVoiceId = userVoiceCache.get(socket.userId);
+      console.log(`🎤 Speaker voice cache: ${speakerVoiceId || 'NOT FOUND'} (userId: ${socket.userId})`);
 
       if (speakerVoiceId) {
         try {
           const audioBuffer = await generateSpeech(translated, speakerVoiceId);
           if (audioBuffer) {
             audioBase64 = audioBuffer.toString('base64');
+            console.log(`🔊 Voice generated: ${audioBase64.length} chars base64`);
           }
         } catch (err) {
           console.error('Voice generation failed, using browser TTS:', err.message);
@@ -145,9 +154,10 @@ io.on('connection', (socket) => {
           translated,
           fromLang,
           toLang,
-          audio: audioBase64, // base64 mp3 audio or null
+          audio: audioBase64,
           voiceCloned: !!audioBase64
         });
+        console.log(`📤 Sent translated text to ${to} | audio: ${!!audioBase64}`);
       }
 
       // Confirmation to sender

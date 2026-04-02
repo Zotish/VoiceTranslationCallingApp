@@ -59,6 +59,13 @@ router.post('/clone', authMiddleware, upload.single('voiceSample'), async (req, 
     user.voiceSampleUrl = req.file.path;
     await user.save();
 
+    // ✅ FIX: Update voice cache immediately so calls use cloned voice
+    const voiceCache = req.app.get('userVoiceCache');
+    if (voiceCache) {
+      voiceCache.set(req.user.id, voiceId);
+      console.log(`Voice cache updated for user ${req.user.id}: ${voiceId}`);
+    }
+
     res.json({
       success: true,
       message: 'Voice cloned successfully!',
@@ -117,6 +124,10 @@ router.delete('/clone', authMiddleware, async (req, res) => {
     user.voiceCloned = false;
     user.voiceSampleUrl = null;
     await user.save();
+
+    // Clear from voice cache
+    const voiceCache = req.app.get('userVoiceCache');
+    if (voiceCache) voiceCache.delete(req.user.id);
 
     res.json({ success: true, message: 'Voice clone deleted' });
   } catch (err) {
