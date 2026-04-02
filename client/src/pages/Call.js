@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCall } from '../context/CallContext';
 import { useAuth } from '../context/AuthContext';
@@ -14,11 +14,20 @@ const LANG_NAMES = {
 function Call() {
   const {
     callState, remoteUser, callDuration, transcripts,
-    isMuted, isSpeaking, isListening, isVoiceCloned, endCall, toggleMute
+    isMuted, isSpeaking, isListening, isVoiceCloned, debugInfo,
+    endCall, toggleMute
   } = useCall();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [showTranscript, setShowTranscript] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(true); // DEFAULT: show transcript
+  const transcriptEndRef = useRef(null);
+
+  // Auto-scroll transcripts
+  useEffect(() => {
+    if (transcriptEndRef.current) {
+      transcriptEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [transcripts]);
 
   const formatDuration = (seconds) => {
     const m = Math.floor(seconds / 60);
@@ -74,61 +83,62 @@ function Call() {
         {/* Voice Activity Indicators */}
         {callState === 'in-call' && (
           <div className="voice-activity-section">
-            {/* Listening indicator */}
+            {/* Status indicators */}
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '10px' }}>
+              <div style={{
+                padding: '4px 12px', borderRadius: '20px', fontSize: '12px',
+                background: isListening ? '#4ade80' : '#666', color: '#000'
+              }}>
+                {isListening ? `Listening (${myLang})` : 'Mic paused'}
+              </div>
+              {isSpeaking && (
+                <div style={{
+                  padding: '4px 12px', borderRadius: '20px', fontSize: '12px',
+                  background: isVoiceCloned ? '#a78bfa' : '#60a5fa', color: '#000'
+                }}>
+                  {isVoiceCloned ? 'Cloned Voice' : 'Playing translation'}
+                </div>
+              )}
+            </div>
+
+            {/* Debug info */}
+            {debugInfo && (
+              <p style={{ color: '#888', fontSize: '11px', textAlign: 'center', margin: '4px 0' }}>
+                {debugInfo}
+              </p>
+            )}
+
+            {/* Voice waves */}
             <div className={`voice-indicator ${isListening ? 'active' : ''}`}>
               <div className="voice-waves">
                 <span></span><span></span><span></span><span></span><span></span>
               </div>
-              <p className="voice-label">
-                {isListening ? `Listening in ${myLang}...` : 'Mic paused'}
-              </p>
             </div>
 
-            {/* Speaking/Playing translation indicator */}
             {isSpeaking && (
               <div className="voice-indicator speaking active">
                 <div className="voice-waves speaking-waves">
                   <span></span><span></span><span></span><span></span><span></span>
                 </div>
-                <p className="voice-label">
-                  {isVoiceCloned
-                    ? `Playing ${remoteUser?.name}'s cloned voice in ${myLang}...`
-                    : `Playing translated voice in ${myLang}...`
-                  }
-                </p>
               </div>
             )}
-
-            {/* Minimal last message preview */}
-            {transcripts.length > 0 && (
-              <div className="last-message-preview">
-                <p className="preview-text">
-                  {transcripts[transcripts.length - 1].type === 'you'
-                    ? `You: "${transcripts[transcripts.length - 1].text}"`
-                    : `${remoteUser?.name}: "${transcripts[transcripts.length - 1].translated || transcripts[transcripts.length - 1].text}"`
-                  }
-                </p>
-              </div>
-            )}
-
-            {/* Toggle transcript button */}
-            <button
-              className="btn-show-transcript"
-              onClick={() => setShowTranscript(!showTranscript)}
-            >
-              {showTranscript ? 'Hide Transcript' : 'Show Transcript'}
-            </button>
           </div>
         )}
 
-        {/* Full Transcript (hidden by default) */}
+        {/* Transcript - ALWAYS VISIBLE during call */}
         {callState === 'in-call' && showTranscript && (
-          <div className="transcripts-area">
+          <div className="transcripts-area" style={{ maxHeight: '300px', overflow: 'auto' }}>
             <div className="transcripts-list">
+              {transcripts.length === 0 && (
+                <p style={{ color: '#888', textAlign: 'center', padding: '20px' }}>
+                  Start speaking in {myLang}... your voice will be translated to {remoteLang}
+                </p>
+              )}
               {transcripts.map((t, i) => (
                 <div key={i} className={`transcript-item ${t.type}`}>
                   <div className="transcript-label">
                     {t.type === 'you' ? 'You' : remoteUser?.name}
+                    {t.voiceCloned && ' (Cloned)'}
                   </div>
                   <div className="transcript-text">{t.text}</div>
                   {t.translated && (
@@ -136,6 +146,7 @@ function Call() {
                   )}
                 </div>
               ))}
+              <div ref={transcriptEndRef} />
             </div>
           </div>
         )}
@@ -160,11 +171,11 @@ function Call() {
             onClick={() => setShowTranscript(!showTranscript)}
           >
             <span className="control-icon">{showTranscript ? '🔊' : '📝'}</span>
-            <small>{showTranscript ? 'Voice' : 'Text'}</small>
+            <small>{showTranscript ? 'Hide' : 'Show'}</small>
           </button>
         </div>
 
-        {/* How it works info (shown when calling) */}
+        {/* Info when calling */}
         {callState === 'calling' && (
           <div className="call-info-box">
             <p>When connected, speak in <strong>{myLang}</strong></p>
