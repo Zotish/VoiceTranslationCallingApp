@@ -1,66 +1,75 @@
-const fetch = require('node-fetch');
 const FormData = require('form-data');
 const fs = require('fs');
-const path = require('path');
 
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
+
+function getApiKey() {
+  return process.env.ELEVENLABS_API_KEY;
+}
 
 /**
  * Clone a voice using ElevenLabs Instant Voice Cloning
- * @param {string} name - Name for the voice
- * @param {string} filePath - Path to the audio file
- * @returns {string} voiceId
  */
 async function cloneVoice(name, filePath) {
-  if (!ELEVENLABS_API_KEY) {
-    throw new Error('ElevenLabs API key not configured');
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error('ElevenLabs API key not configured. Set ELEVENLABS_API_KEY in Railway environment variables.');
   }
 
+  console.log(`🎤 Cloning voice for "${name}" from file: ${filePath}`);
+  console.log(`🔑 API key: ${apiKey.substring(0, 5)}...${apiKey.substring(apiKey.length - 3)}`);
+
+  // Verify file exists
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Audio file not found: ${filePath}`);
+  }
+
+  const fileSize = fs.statSync(filePath).size;
+  console.log(`📁 File size: ${(fileSize / 1024).toFixed(1)} KB`);
+
   const form = new FormData();
-  form.append('name', `VoiceTranslate_${name}`);
-  form.append('description', `Cloned voice for ${name} on VoiceTranslate app`);
+  form.append('name', `VT_${name}_${Date.now()}`);
+  form.append('description', `Cloned voice for ${name}`);
   form.append('files', fs.createReadStream(filePath));
 
   const response = await fetch(`${ELEVENLABS_BASE}/voices/add`, {
     method: 'POST',
     headers: {
-      'xi-api-key': ELEVENLABS_API_KEY,
+      'xi-api-key': apiKey,
+      ...form.getHeaders(),
     },
     body: form,
   });
 
+  const responseText = await response.text();
+  console.log(`📡 ElevenLabs response (${response.status}):`, responseText);
+
   if (!response.ok) {
-    const errText = await response.text();
-    console.error('ElevenLabs clone error:', errText);
-    throw new Error(`Voice cloning failed: ${response.status}`);
+    throw new Error(`Voice cloning failed (${response.status}): ${responseText}`);
   }
 
-  const data = await response.json();
+  const data = JSON.parse(responseText);
+  console.log(`✅ Voice cloned! ID: ${data.voice_id}`);
   return data.voice_id;
 }
 
 /**
  * Generate speech using a cloned voice
- * @param {string} text - Text to speak
- * @param {string} voiceId - ElevenLabs voice ID
- * @returns {Buffer} audio buffer (mp3)
  */
 async function generateSpeech(text, voiceId) {
-  if (!ELEVENLABS_API_KEY) {
-    return null; // Will fallback to browser TTS
-  }
+  const apiKey = getApiKey();
+  if (!apiKey) return null;
 
   const response = await fetch(`${ELEVENLABS_BASE}/text-to-speech/${voiceId}`, {
     method: 'POST',
     headers: {
-      'xi-api-key': ELEVENLABS_API_KEY,
+      'xi-api-key': apiKey,
       'Content-Type': 'application/json',
       'Accept': 'audio/mpeg',
     },
     body: JSON.stringify({
       text: text,
-      model_id: 'eleven_multilingual_v2', // Supports all languages
+      model_id: 'eleven_multilingual_v2',
       voice_settings: {
         stability: 0.5,
         similarity_boost: 0.75,
@@ -72,12 +81,13 @@ async function generateSpeech(text, voiceId) {
 
   if (!response.ok) {
     const errText = await response.text();
-    console.error('ElevenLabs TTS error:', errText);
-    return null; // Fallback to browser TTS
+    console.error('ElevenLabs TTS error:', response.status, errText);
+    return null;
   }
 
-  const buffer = await response.buffer();
-  return buffer;
+  // Get audio as buffer
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
 }
 
 /**

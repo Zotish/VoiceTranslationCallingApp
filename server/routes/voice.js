@@ -38,8 +38,19 @@ const upload = multer({
 // Upload voice sample and clone
 router.post('/clone', authMiddleware, upload.single('voiceSample'), async (req, res) => {
   try {
+    console.log('=== VOICE CLONE REQUEST ===');
+    console.log('File:', req.file ? `${req.file.filename} (${req.file.size} bytes, ${req.file.mimetype})` : 'NONE');
+    console.log('User ID:', req.user.id);
+    console.log('API Key set:', !!process.env.ELEVENLABS_API_KEY);
+
     if (!req.file) {
       return res.status(400).json({ error: 'No audio file provided' });
+    }
+
+    if (!process.env.ELEVENLABS_API_KEY) {
+      return res.status(500).json({
+        error: 'ElevenLabs API key not configured on server. Add ELEVENLABS_API_KEY to Railway environment variables.'
+      });
     }
 
     const user = await User.findById(req.user.id);
@@ -47,11 +58,14 @@ router.post('/clone', authMiddleware, upload.single('voiceSample'), async (req, 
 
     // Delete old voice if exists
     if (user.voiceId) {
+      console.log('Deleting old voice:', user.voiceId);
       await deleteVoice(user.voiceId);
     }
 
     // Clone with ElevenLabs
+    console.log('Starting ElevenLabs clone...');
     const voiceId = await cloneVoice(user.name, req.file.path);
+    console.log('Clone successful! Voice ID:', voiceId);
 
     // Update user
     user.voiceId = voiceId;
@@ -59,11 +73,11 @@ router.post('/clone', authMiddleware, upload.single('voiceSample'), async (req, 
     user.voiceSampleUrl = req.file.path;
     await user.save();
 
-    // ✅ FIX: Update voice cache immediately so calls use cloned voice
+    // Update voice cache immediately
     const voiceCache = req.app.get('userVoiceCache');
     if (voiceCache) {
       voiceCache.set(req.user.id, voiceId);
-      console.log(`Voice cache updated for user ${req.user.id}: ${voiceId}`);
+      console.log(`Voice cache updated: ${req.user.id} → ${voiceId}`);
     }
 
     res.json({
@@ -73,7 +87,9 @@ router.post('/clone', authMiddleware, upload.single('voiceSample'), async (req, 
       voiceId
     });
   } catch (err) {
-    console.error('Voice clone error:', err);
+    console.error('=== VOICE CLONE ERROR ===');
+    console.error('Message:', err.message);
+    console.error('Stack:', err.stack);
 
     // Clean up uploaded file on error
     if (req.file && fs.existsSync(req.file.path)) {
@@ -82,7 +98,7 @@ router.post('/clone', authMiddleware, upload.single('voiceSample'), async (req, 
 
     res.status(500).json({
       error: err.message || 'Voice cloning failed',
-      details: 'Make sure ELEVENLABS_API_KEY is set in server environment'
+      details: 'Check Railway logs for more details'
     });
   }
 });
