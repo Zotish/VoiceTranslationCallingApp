@@ -67,7 +67,23 @@ export function CallProvider({ children }) {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }, []);
 
-  // ===== TTS QUEUE SYSTEM - plays one at a time, no canceling =====
+  // ===== GOOGLE TRANSLATE TTS FALLBACK =====
+  const playGoogleTTS = useCallback((text, lang) => {
+    return new Promise((resolve, reject) => {
+      try {
+        // Google Translate TTS - works for ALL languages
+        const encoded = encodeURIComponent(text.substring(0, 200));
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=${lang}&client=tw-ob`;
+        const audio = new Audio(url);
+        audio.volume = 1.0;
+        audio.onended = () => { addDebug('Google TTS: done'); resolve(); };
+        audio.onerror = () => { addDebug('Google TTS: failed'); reject(); };
+        audio.play().then(() => addDebug('Google TTS: playing')).catch(reject);
+      } catch (e) { reject(e); }
+    });
+  }, [addDebug]);
+
+  // ===== TTS QUEUE SYSTEM =====
   const processNextTTS = useCallback(() => {
     if (isTTSPlayingRef.current || ttsQueueRef.current.length === 0) return;
 
@@ -75,69 +91,71 @@ export function CallProvider({ children }) {
     isTTSPlayingRef.current = true;
     setIsSpeaking(true);
 
-    try {
-      const utterance = new SpeechSynthesisUtterance(text);
-      const langCode = getLangCode(lang);
-      utterance.lang = langCode;
-      utterance.rate = 1.0;
-      utterance.volume = 1.0;
+    const langCode = getLangCode(lang);
+    const voices = window.speechSynthesis.getVoices();
+    const match = voices.find(v => v.lang === langCode) ||
+                  voices.find(v => v.lang.startsWith(lang + '-')) ||
+                  voices.find(v => v.lang.startsWith(lang + '_')) ||
+                  voices.find(v => v.lang.toLowerCase().startsWith(lang.toLowerCase()));
 
-      // Find best matching voice
-      const voices = window.speechSynthesis.getVoices();
-      const match = voices.find(v => v.lang === langCode) ||
-                    voices.find(v => v.lang.startsWith(lang + '-')) ||
-                    voices.find(v => v.lang.startsWith(lang + '_')) ||
-                    voices.find(v => v.lang.toLowerCase().startsWith(lang.toLowerCase()));
-
-      if (match) {
-        utterance.voice = match;
-        addDebug(`TTS voice: ${match.name} (${match.lang})`);
-      } else {
-        addDebug(`TTS: no ${lang} voice, using default`);
-      }
-
-      utterance.onstart = () => addDebug(`TTS PLAYING: "${text.substring(0, 30)}..."`);
-
-      utterance.onend = () => {
-        addDebug('TTS: finished');
-        isTTSPlayingRef.current = false;
-        setIsSpeaking(false);
-        // Play next in queue
-        processNextTTS();
-      };
-
-      utterance.onerror = (e) => {
-        addDebug(`TTS ERROR: ${e.error}`);
-        isTTSPlayingRef.current = false;
-        setIsSpeaking(false);
-        processNextTTS();
-      };
-
-      window.speechSynthesis.speak(utterance);
-
-      // Chrome stuck fix
-      setTimeout(() => {
-        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-      }, 200);
-
-      // Safety timeout - if TTS hangs for 15s, move on
-      setTimeout(() => {
-        if (isTTSPlayingRef.current) {
-          addDebug('TTS: timeout, moving on');
-          window.speechSynthesis.cancel();
-          isTTSPlayingRef.current = false;
-          setIsSpeaking(false);
-          processNextTTS();
-        }
-      }, 15000);
-
-    } catch (err) {
-      addDebug(`TTS fail: ${err.message}`);
+    const finishTTS = () => {
       isTTSPlayingRef.current = false;
       setIsSpeaking(false);
       processNextTTS();
+    };
+
+    if (match) {
+      // Browser has a voice for this language - use native TTS
+      addDebug(`TTS: ${match.name} (${match.lang})`);
+      try {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = langCode;
+        utterance.voice = match;
+        utterance.rate = 1.0;
+        utterance.volume = 1.0;
+
+        utterance.onstart = () => addDebug(`TTS PLAYING: "${text.substring(0, 30)}..."`);
+        utterance.onend = () => { addDebug('TTS: done'); finishTTS(); };
+        utterance.onerror = (e) => {
+          addDebug(`TTS ERROR: ${e.error}, trying Google TTS...`);
+          playGoogleTTS(text, lang).then(finishTTS).catch(finishTTS);
+        };
+
+        window.speechSynthesis.speak(utterance);
+        setTimeout(() => {
+          if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+        }, 200);
+      } catch (err) {
+        addDebug(`TTS fail: ${err.message}`);
+        playGoogleTTS(text, lang).then(finishTTS).catch(finishTTS);
+      }
+    } else {
+      // No native voice - use Google Translate TTS
+      addDebug(`No ${lang} voice found, using Google TTS...`);
+      playGoogleTTS(text, lang).then(finishTTS).catch(() => {
+        // Last resort: try native TTS with default voice
+        addDebug('Google TTS failed, trying default voice...');
+        try {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = langCode;
+          utterance.rate = 1.0;
+          utterance.volume = 1.0;
+          utterance.onend = () => { addDebug('Default TTS: done'); finishTTS(); };
+          utterance.onerror = () => finishTTS();
+          window.speechSynthesis.speak(utterance);
+        } catch (e) { finishTTS(); }
+      });
     }
-  }, [addDebug]);
+
+    // Safety timeout
+    setTimeout(() => {
+      if (isTTSPlayingRef.current) {
+        addDebug('TTS: timeout');
+        window.speechSynthesis.cancel();
+        finishTTS();
+      }
+    }, 15000);
+  }, [addDebug, playGoogleTTS]);
 
   const queueTTS = useCallback((text, lang) => {
     if (!text || !text.trim()) return;
@@ -146,14 +164,35 @@ export function CallProvider({ children }) {
     processNextTTS();
   }, [addDebug, processNextTTS]);
 
+  // ===== REQUEST MIC PERMISSION (fixes mobile not-allowed error) =====
+  const requestMicPermission = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Got permission, now release the stream (we don't need it for WebRTC)
+      stream.getTracks().forEach(track => track.stop());
+      addDebug('MIC PERMISSION: granted');
+      return true;
+    } catch (err) {
+      addDebug(`MIC PERMISSION DENIED: ${err.message}`);
+      return false;
+    }
+  }, [addDebug]);
+
   // ===== SPEECH RECOGNITION =====
-  const startSpeechRecognition = useCallback((myLang, targetLang, remoteId) => {
+  const startSpeechRecognition = useCallback(async (myLang, targetLang, remoteId) => {
     addDebug(`START MIC: ${myLang} → ${targetLang}, remote=${remoteId}`);
     callParamsRef.current = { myLang, remoteLang: targetLang, remoteId };
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       addDebug('ERROR: SpeechRecognition not supported!');
+      return;
+    }
+
+    // Request mic permission FIRST (prevents not-allowed on mobile)
+    const hasPermission = await requestMicPermission();
+    if (!hasPermission) {
+      addDebug('Cannot start mic - permission denied');
       return;
     }
 
@@ -165,27 +204,28 @@ export function CallProvider({ children }) {
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = false; // ONLY final results - no duplicates!
+    recognition.interimResults = false;
     recognition.lang = getLangCode(myLang);
     recognition.maxAlternatives = 1;
 
-    // Track which results we already processed
     processedResultsRef.current = 0;
+    let retryCount = 0;
+    const MAX_RETRIES = 50; // Allow many retries during a call
 
     recognition.onstart = () => {
       setIsListening(true);
+      retryCount = 0; // Reset on successful start
       addDebug(`MIC ON: ${myLang}`);
     };
 
     recognition.onresult = (event) => {
-      // Process ONLY new results we haven't seen
       for (let i = processedResultsRef.current; i < event.results.length; i++) {
         const result = event.results[i];
         if (result.isFinal) {
           const text = result[0].transcript.trim();
           processedResultsRef.current = i + 1;
 
-          if (!text || text.length < 2) continue; // Skip tiny fragments
+          if (!text || text.length < 2) continue;
 
           addDebug(`HEARD: "${text}"`);
 
@@ -207,16 +247,26 @@ export function CallProvider({ children }) {
     };
 
     recognition.onerror = (e) => {
-      if (e.error !== 'no-speech' && e.error !== 'aborted') {
+      if (e.error === 'not-allowed') {
+        addDebug('MIC: not-allowed - re-requesting permission...');
+        // Re-request permission and retry
+        requestMicPermission().then(ok => {
+          if (ok && callStateRef.current === 'in-call') {
+            setTimeout(() => {
+              try { recognition.start(); } catch (err) { /* */ }
+            }, 1000);
+          }
+        });
+      } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
         addDebug(`MIC ERROR: ${e.error}`);
       }
     };
 
     recognition.onend = () => {
       setIsListening(false);
-      if (callStateRef.current === 'in-call') {
-        // Reset result counter on restart
+      if (callStateRef.current === 'in-call' && retryCount < MAX_RETRIES) {
         processedResultsRef.current = 0;
+        retryCount++;
         setTimeout(() => {
           if (callStateRef.current === 'in-call' && recognitionRef.current) {
             try {
@@ -236,7 +286,7 @@ export function CallProvider({ children }) {
     } catch (e) {
       addDebug(`recognition.start() FAIL: ${e.message}`);
     }
-  }, [addDebug]);
+  }, [addDebug, requestMicPermission]);
 
   const stopSpeechRecognition = useCallback(() => {
     if (recognitionRef.current) {
