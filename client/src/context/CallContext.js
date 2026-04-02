@@ -64,13 +64,40 @@ export function CallProvider({ children }) {
   }, []);
 
   // ===== SIMPLE AUDIO PLAYBACK =====
-  // No queue - just play immediately when translation comes
+
+  const speakWithTTS = useCallback((text, lang) => {
+    try {
+      window.speechSynthesis.cancel();
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = getLangCode(lang);
+      utterance.rate = 1.0;
+      utterance.volume = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const targetLang = getLangCode(lang);
+      const match = voices.find(v => v.lang === targetLang) ||
+                    voices.find(v => v.lang.startsWith(lang));
+      if (match) utterance.voice = match;
+
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+
+      setTimeout(() => setIsSpeaking(false), 20000);
+
+      window.speechSynthesis.speak(utterance);
+      console.log(`TTS playing: "${text}" in ${lang}`);
+    } catch (err) {
+      console.error('TTS failed:', err);
+      setIsSpeaking(false);
+    }
+  }, []);
+
   const playTranslatedAudio = useCallback((text, lang, audioBase64) => {
     if (!text) return;
 
     setIsSpeaking(true);
 
-    // If we have cloned audio (base64 mp3), play it
     if (audioBase64) {
       try {
         const audio = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
@@ -88,39 +115,8 @@ export function CallProvider({ children }) {
       }
     }
 
-    // Fallback: Browser TTS
     speakWithTTS(text, lang);
-  }, []);
-
-  const speakWithTTS = useCallback((text, lang) => {
-    try {
-      // Cancel any ongoing speech first
-      window.speechSynthesis.cancel();
-
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = getLangCode(lang);
-      utterance.rate = 1.0;
-      utterance.volume = 1.0;
-
-      const voices = window.speechSynthesis.getVoices();
-      const targetLang = getLangCode(lang);
-      const match = voices.find(v => v.lang === targetLang) ||
-                    voices.find(v => v.lang.startsWith(lang));
-      if (match) utterance.voice = match;
-
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-
-      // Safety timeout - if TTS doesn't finish in 20s, reset
-      setTimeout(() => setIsSpeaking(false), 20000);
-
-      window.speechSynthesis.speak(utterance);
-      console.log(`🔊 TTS playing: "${text}" in ${lang}`);
-    } catch (err) {
-      console.error('TTS failed:', err);
-      setIsSpeaking(false);
-    }
-  }, []);
+  }, [speakWithTTS]);
 
   // ===== SPEECH RECOGNITION =====
   const startSpeechRecognition = useCallback((myLang, targetLang, remoteId) => {
