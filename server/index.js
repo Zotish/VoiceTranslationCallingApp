@@ -18,13 +18,24 @@ async function connectDB() {
   const externalURI = process.env.MONGODB_URI;
 
   if (externalURI) {
-    await mongoose.connect(externalURI);
+    console.log('Connecting to external MongoDB...');
+    await mongoose.connect(externalURI, {
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+    });
     console.log('MongoDB connected (external)');
   } else {
-    const { MongoMemoryServer } = require('mongodb-memory-server');
-    const mongod = await MongoMemoryServer.create();
-    await mongoose.connect(mongod.getUri());
-    console.log('MongoDB connected (in-memory for development)');
+    // Local development only - mongodb-memory-server is devDependency
+    try {
+      const { MongoMemoryServer } = require('mongodb-memory-server');
+      const mongod = await MongoMemoryServer.create();
+      await mongoose.connect(mongod.getUri());
+      console.log('MongoDB connected (in-memory for development)');
+    } catch (err) {
+      console.error('No MONGODB_URI set and mongodb-memory-server not available.');
+      console.error('Set MONGODB_URI environment variable for production.');
+      process.exit(1);
+    }
   }
 }
 
