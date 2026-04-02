@@ -1,5 +1,5 @@
-const FormData = require('form-data');
 const fs = require('fs');
+const path = require('path');
 
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
@@ -17,9 +17,7 @@ async function cloneVoice(name, filePath) {
   }
 
   console.log(`🎤 Cloning voice for "${name}" from file: ${filePath}`);
-  console.log(`🔑 API key: ${apiKey.substring(0, 5)}...${apiKey.substring(apiKey.length - 3)}`);
 
-  // Verify file exists
   if (!fs.existsSync(filePath)) {
     throw new Error(`Audio file not found: ${filePath}`);
   }
@@ -27,16 +25,22 @@ async function cloneVoice(name, filePath) {
   const fileSize = fs.statSync(filePath).size;
   console.log(`📁 File size: ${(fileSize / 1024).toFixed(1)} KB`);
 
+  // Read file as buffer and create Blob (Node 18+ native FormData + Blob)
+  const fileBuffer = fs.readFileSync(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeMap = { '.webm': 'audio/webm', '.mp4': 'audio/mp4', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg' };
+  const mimeType = mimeMap[ext] || 'audio/webm';
+
+  const blob = new Blob([fileBuffer], { type: mimeType });
   const form = new FormData();
   form.append('name', `VT_${name}_${Date.now()}`);
   form.append('description', `Cloned voice for ${name}`);
-  form.append('files', fs.createReadStream(filePath));
+  form.append('files', blob, `voice_sample${ext || '.webm'}`);
 
   const response = await fetch(`${ELEVENLABS_BASE}/voices/add`, {
     method: 'POST',
     headers: {
       'xi-api-key': apiKey,
-      ...form.getHeaders(),
     },
     body: form,
   });
