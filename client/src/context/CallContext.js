@@ -67,58 +67,7 @@ export function CallProvider({ children }) {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }, []);
 
-  // ===== TTS QUEUE SYSTEM =====
-  // Server sends audio as base64 - just play it! No browser TTS needed.
-  const processNextTTS = useCallback(() => {
-    if (isTTSPlayingRef.current || ttsQueueRef.current.length === 0) return;
-
-    const { text, lang, audioBase64 } = ttsQueueRef.current.shift();
-    isTTSPlayingRef.current = true;
-    setIsSpeaking(true);
-
-    const finishTTS = () => {
-      isTTSPlayingRef.current = false;
-      setIsSpeaking(false);
-      // Play next in queue
-      setTimeout(() => processNextTTS(), 100);
-    };
-
-    if (audioBase64) {
-      // SERVER AUDIO - most reliable! Works for ALL languages
-      addDebug(`PLAYING SERVER AUDIO for: "${text.substring(0, 30)}..."`);
-      try {
-        const audio = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
-        audio.volume = 1.0;
-        audio.onended = () => { addDebug('AUDIO: done ✅'); finishTTS(); };
-        audio.onerror = (e) => {
-          addDebug(`AUDIO ERROR: ${e.message || 'unknown'}, trying browser TTS...`);
-          fallbackBrowserTTS(text, lang, finishTTS);
-        };
-        audio.play().catch((e) => {
-          addDebug(`AUDIO PLAY FAIL: ${e.message}, trying browser TTS...`);
-          fallbackBrowserTTS(text, lang, finishTTS);
-        });
-      } catch (err) {
-        addDebug(`AUDIO FAIL: ${err.message}`);
-        fallbackBrowserTTS(text, lang, finishTTS);
-      }
-    } else {
-      // No server audio - fallback to browser TTS
-      addDebug('No server audio, using browser TTS...');
-      fallbackBrowserTTS(text, lang, finishTTS);
-    }
-
-    // Safety timeout
-    setTimeout(() => {
-      if (isTTSPlayingRef.current) {
-        addDebug('TTS: timeout, skipping');
-        window.speechSynthesis.cancel();
-        finishTTS();
-      }
-    }, 15000);
-  }, [addDebug]);
-
-  // Browser TTS as last resort
+  // Browser TTS as last resort (defined first so processNextTTS can use it)
   const fallbackBrowserTTS = useCallback((text, lang, onDone) => {
     try {
       const langCode = getLangCode(lang);
@@ -140,6 +89,52 @@ export function CallProvider({ children }) {
       onDone();
     }
   }, [addDebug]);
+
+  // ===== TTS QUEUE SYSTEM =====
+  const processNextTTS = useCallback(() => {
+    if (isTTSPlayingRef.current || ttsQueueRef.current.length === 0) return;
+
+    const { text, lang, audioBase64 } = ttsQueueRef.current.shift();
+    isTTSPlayingRef.current = true;
+    setIsSpeaking(true);
+
+    const finishTTS = () => {
+      isTTSPlayingRef.current = false;
+      setIsSpeaking(false);
+      setTimeout(() => processNextTTS(), 100);
+    };
+
+    if (audioBase64) {
+      addDebug(`PLAYING SERVER AUDIO for: "${text.substring(0, 30)}..."`);
+      try {
+        const audio = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
+        audio.volume = 1.0;
+        audio.onended = () => { addDebug('AUDIO: done ✅'); finishTTS(); };
+        audio.onerror = () => {
+          addDebug('AUDIO ERROR, trying browser TTS...');
+          fallbackBrowserTTS(text, lang, finishTTS);
+        };
+        audio.play().catch(() => {
+          addDebug('AUDIO PLAY FAIL, trying browser TTS...');
+          fallbackBrowserTTS(text, lang, finishTTS);
+        });
+      } catch (err) {
+        addDebug(`AUDIO FAIL: ${err.message}`);
+        fallbackBrowserTTS(text, lang, finishTTS);
+      }
+    } else {
+      addDebug('No server audio, using browser TTS...');
+      fallbackBrowserTTS(text, lang, finishTTS);
+    }
+
+    setTimeout(() => {
+      if (isTTSPlayingRef.current) {
+        addDebug('TTS: timeout, skipping');
+        window.speechSynthesis.cancel();
+        finishTTS();
+      }
+    }, 15000);
+  }, [addDebug, fallbackBrowserTTS]);
 
   const queueTTS = useCallback((text, lang, audioBase64) => {
     if (!text || !text.trim()) return;
