@@ -149,7 +149,7 @@ function Call() {
         )}
 
         {/* Transcript */}
-        {callState === 'in-call' && showTranscript && (
+        {callState === 'in-call' && (
           <div className="transcripts-area" style={{ maxHeight: '250px', overflow: 'auto' }}>
             <div className="transcripts-list">
               {transcripts.length === 0 && (
