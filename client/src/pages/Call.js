@@ -14,12 +14,11 @@ const LANG_NAMES = {
 function Call() {
   const {
     callState, remoteUser, callDuration, transcripts,
-    isMuted, isSpeaking, isListening, isVoiceCloned, debugLog,
+    isMuted, isSpeaking, isListening, debugLog,
     endCall, toggleMute, sendTestMessage
   } = useCall();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [showTranscript, setShowTranscript] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
   const [testText, setTestText] = useState('');
   const transcriptEndRef = useRef(null);
