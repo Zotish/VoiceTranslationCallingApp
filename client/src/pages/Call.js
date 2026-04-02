@@ -14,20 +14,28 @@ const LANG_NAMES = {
 function Call() {
   const {
     callState, remoteUser, callDuration, transcripts,
-    isMuted, isSpeaking, isListening, isVoiceCloned, debugInfo,
-    endCall, toggleMute
+    isMuted, isSpeaking, isListening, isVoiceCloned, debugLog,
+    endCall, toggleMute, sendTestMessage
   } = useCall();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [showTranscript, setShowTranscript] = useState(true); // DEFAULT: show transcript
+  const [showTranscript, setShowTranscript] = useState(true);
+  const [showDebug, setShowDebug] = useState(false);
+  const [testText, setTestText] = useState('');
   const transcriptEndRef = useRef(null);
+  const debugEndRef = useRef(null);
 
-  // Auto-scroll transcripts
   useEffect(() => {
     if (transcriptEndRef.current) {
       transcriptEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [transcripts]);
+
+  useEffect(() => {
+    if (debugEndRef.current) {
+      debugEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [debugLog]);
 
   const formatDuration = (seconds) => {
     const m = Math.floor(seconds / 60);
@@ -38,6 +46,13 @@ function Call() {
   const handleEndCall = () => {
     endCall();
     navigate('/dashboard');
+  };
+
+  const handleTestSend = () => {
+    if (testText.trim()) {
+      sendTestMessage(testText.trim());
+      setTestText('');
+    }
   };
 
   if (callState === 'idle' && !remoteUser) {
@@ -51,7 +66,7 @@ function Call() {
   return (
     <div className="call-page">
       <div className="call-container">
-        {/* Call Header */}
+        {/* Header */}
         <div className="call-header">
           <div className="call-avatar-large">
             <div className={`avatar-ring ${callState === 'in-call' ? (isSpeaking ? 'speaking' : 'connected') : 'calling'}`}>
@@ -62,12 +77,7 @@ function Call() {
           </div>
           <h2 className="call-name">{remoteUser?.name || 'Unknown'}</h2>
 
-          {callState === 'calling' && (
-            <p className="call-status-text calling-pulse">Calling...</p>
-          )}
-          {callState === 'ringing' && (
-            <p className="call-status-text calling-pulse">Ringing...</p>
-          )}
+          {callState === 'calling' && <p className="call-status-text calling-pulse">Calling...</p>}
           {callState === 'in-call' && (
             <>
               <p className="call-timer">{formatDuration(callDuration)}</p>
@@ -80,65 +90,78 @@ function Call() {
           )}
         </div>
 
-        {/* Voice Activity Indicators */}
+        {/* Status indicators */}
+        {callState === 'in-call' && (
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '10px 0', flexWrap: 'wrap' }}>
+            <span style={{
+              padding: '4px 10px', borderRadius: '12px', fontSize: '11px',
+              background: isListening ? '#22c55e' : '#ef4444', color: '#fff'
+            }}>
+              MIC: {isListening ? 'ON' : 'OFF'}
+            </span>
+            {isSpeaking && (
+              <span style={{
+                padding: '4px 10px', borderRadius: '12px', fontSize: '11px',
+                background: '#3b82f6', color: '#fff'
+              }}>
+                PLAYING TRANSLATION
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Voice waves */}
         {callState === 'in-call' && (
           <div className="voice-activity-section">
-            {/* Status indicators */}
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '10px' }}>
-              <div style={{
-                padding: '4px 12px', borderRadius: '20px', fontSize: '12px',
-                background: isListening ? '#4ade80' : '#666', color: '#000'
-              }}>
-                {isListening ? `Listening (${myLang})` : 'Mic paused'}
-              </div>
-              {isSpeaking && (
-                <div style={{
-                  padding: '4px 12px', borderRadius: '20px', fontSize: '12px',
-                  background: isVoiceCloned ? '#a78bfa' : '#60a5fa', color: '#000'
-                }}>
-                  {isVoiceCloned ? 'Cloned Voice' : 'Playing translation'}
-                </div>
-              )}
-            </div>
-
-            {/* Debug info */}
-            {debugInfo && (
-              <p style={{ color: '#888', fontSize: '11px', textAlign: 'center', margin: '4px 0' }}>
-                {debugInfo}
-              </p>
-            )}
-
-            {/* Voice waves */}
             <div className={`voice-indicator ${isListening ? 'active' : ''}`}>
               <div className="voice-waves">
                 <span></span><span></span><span></span><span></span><span></span>
               </div>
             </div>
-
-            {isSpeaking && (
-              <div className="voice-indicator speaking active">
-                <div className="voice-waves speaking-waves">
-                  <span></span><span></span><span></span><span></span><span></span>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Transcript - ALWAYS VISIBLE during call */}
+        {/* Test send input - type text to test translation */}
+        {callState === 'in-call' && (
+          <div style={{ padding: '8px 16px', display: 'flex', gap: '8px' }}>
+            <input
+              type="text"
+              value={testText}
+              onChange={e => setTestText(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleTestSend()}
+              placeholder={`Type in ${myLang} to test...`}
+              style={{
+                flex: 1, padding: '8px 12px', borderRadius: '8px',
+                border: '1px solid #444', background: '#1a1a2e', color: '#fff',
+                fontSize: '14px'
+              }}
+            />
+            <button
+              onClick={handleTestSend}
+              style={{
+                padding: '8px 16px', borderRadius: '8px',
+                background: '#7c3aed', color: '#fff', border: 'none',
+                cursor: 'pointer', fontSize: '14px'
+              }}
+            >
+              Send
+            </button>
+          </div>
+        )}
+
+        {/* Transcript */}
         {callState === 'in-call' && showTranscript && (
-          <div className="transcripts-area" style={{ maxHeight: '300px', overflow: 'auto' }}>
+          <div className="transcripts-area" style={{ maxHeight: '250px', overflow: 'auto' }}>
             <div className="transcripts-list">
               {transcripts.length === 0 && (
-                <p style={{ color: '#888', textAlign: 'center', padding: '20px' }}>
-                  Start speaking in {myLang}... your voice will be translated to {remoteLang}
+                <p style={{ color: '#888', textAlign: 'center', padding: '20px', fontSize: '13px' }}>
+                  Speak in {myLang} or type above to test...
                 </p>
               )}
               {transcripts.map((t, i) => (
                 <div key={i} className={`transcript-item ${t.type}`}>
                   <div className="transcript-label">
                     {t.type === 'you' ? 'You' : remoteUser?.name}
-                    {t.voiceCloned && ' (Cloned)'}
                   </div>
                   <div className="transcript-text">{t.text}</div>
                   {t.translated && (
@@ -153,10 +176,7 @@ function Call() {
 
         {/* Call Controls */}
         <div className="call-controls">
-          <button
-            className={`btn-control ${isMuted ? 'active' : ''}`}
-            onClick={toggleMute}
-          >
+          <button className={`btn-control ${isMuted ? 'active' : ''}`} onClick={toggleMute}>
             <span className="control-icon">{isMuted ? '🔇' : '🎤'}</span>
             <small>{isMuted ? 'Unmute' : 'Mute'}</small>
           </button>
@@ -166,21 +186,38 @@ function Call() {
             <small>End</small>
           </button>
 
-          <button
-            className="btn-control"
-            onClick={() => setShowTranscript(!showTranscript)}
-          >
-            <span className="control-icon">{showTranscript ? '🔊' : '📝'}</span>
-            <small>{showTranscript ? 'Hide' : 'Show'}</small>
+          <button className="btn-control" onClick={() => setShowDebug(!showDebug)}>
+            <span className="control-icon">🐛</span>
+            <small>Debug</small>
           </button>
         </div>
 
-        {/* Info when calling */}
+        {/* Debug panel */}
+        {showDebug && (
+          <div style={{
+            margin: '10px 16px', padding: '10px', borderRadius: '8px',
+            background: '#0a0a1a', border: '1px solid #333', maxHeight: '200px', overflow: 'auto'
+          }}>
+            <p style={{ color: '#7c3aed', fontSize: '12px', fontWeight: 'bold', marginBottom: '6px' }}>
+              Debug Log
+            </p>
+            {debugLog.map((msg, i) => (
+              <p key={i} style={{ color: '#aaa', fontSize: '10px', margin: '2px 0', fontFamily: 'monospace' }}>
+                {msg}
+              </p>
+            ))}
+            {debugLog.length === 0 && (
+              <p style={{ color: '#666', fontSize: '10px' }}>No debug messages yet...</p>
+            )}
+            <div ref={debugEndRef} />
+          </div>
+        )}
+
+        {/* Calling info */}
         {callState === 'calling' && (
           <div className="call-info-box">
             <p>When connected, speak in <strong>{myLang}</strong></p>
-            <p>Your voice will be translated to <strong>{remoteLang}</strong></p>
-            <p>and played as voice to {remoteUser?.name}</p>
+            <p>Translation will play as voice in <strong>{remoteLang}</strong></p>
           </div>
         )}
       </div>
