@@ -38,6 +38,7 @@ function Dashboard() {
 
   const formatTime = (timestamp) => {
     const d = new Date(timestamp);
+    if (Number.isNaN(d.getTime())) return 'Unknown time';
     return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
@@ -90,7 +91,7 @@ function Dashboard() {
                       {call.type === 'outgoing' ? call.calleeName : call.callerName}
                     </div>
                     <div className="history-meta">
-                      {formatTime(call.timestamp)} · {formatDuration(call.duration)}
+                      {formatTime(call.timestamp || call.createdAt)} · {formatDuration(call.duration || 0)}
                     </div>
                   </div>
                   <div className="history-langs">

@@ -23,10 +23,19 @@ router.get('/history', authMiddleware, async (req, res) => {
 // Log a call
 router.post('/log', authMiddleware, async (req, res) => {
   try {
-    const { calleeId, calleeName, callerName, duration, fromLang, toLang, type } = req.body;
+    const {
+      callerId,
+      callerName,
+      calleeId,
+      calleeName,
+      duration,
+      fromLang,
+      toLang,
+      type
+    } = req.body;
 
     const callRecord = await CallLog.create({
-      callerId: req.user.id,
+      callerId: callerId || req.user.id,
       callerName: callerName || req.user.name,
       calleeId,
       calleeName,

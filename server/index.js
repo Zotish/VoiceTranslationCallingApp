@@ -14,6 +14,28 @@ const { generateTTS } = require('./services/tts');
 const { generateSpeech } = require('./services/voiceClone');
 const User = require('./models/User');
 
+function getAllowedOrigins() {
+  const configured = (process.env.FRONTEND_URL || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+
+  return [
+    ...configured,
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001'
+  ];
+}
+
+const allowedOrigins = [...new Set(getAllowedOrigins())];
+
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  return allowedOrigins.includes(origin);
+}
+
 // MongoDB connection
 async function connectDB() {
   const externalURI = process.env.MONGODB_URI;
@@ -49,12 +71,26 @@ const app = express();
 const server = http.createServer(app);
 
 // CORS
-app.use(cors());
+app.use(cors({
+  origin(origin, callback) {
+    if (isOriginAllowed(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+}));
 
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+    origin(origin, callback) {
+      if (isOriginAllowed(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true
   },
   maxHttpBufferSize: 5e6 // 5MB for audio data
 });

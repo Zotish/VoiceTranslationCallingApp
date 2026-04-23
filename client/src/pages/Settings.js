@@ -143,7 +143,7 @@ function Settings() {
   const uploadVoice = async () => {
     if (!recordedBlob) return showError('Record your voice first');
 
-    if (recordingTime < 10) {
+    if (recordingTime < 30) {
       return showError('Recording too short! Please record at least 30 seconds for best results.');
     }
 
@@ -233,7 +233,7 @@ function Settings() {
               </div>
               <p className="rec-tip">
                 {recordingTime < 10
-                  ? 'Keep talking... (min 10 seconds)'
+                  ? 'Keep talking... (minimum 30 seconds recommended)'
                   : recordingTime < 30
                     ? 'Good! Keep going for better quality...'
                     : 'Great! You can stop now or continue for even better results.'

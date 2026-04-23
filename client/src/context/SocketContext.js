@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
-import { BACKEND_URL } from '../services/api';
+import { getBackendUrl } from '../services/api';
 
 const SocketContext = createContext();
 
@@ -16,20 +16,30 @@ export function SocketProvider({ children }) {
 
   useEffect(() => {
     if (user) {
-      const newSocket = io(BACKEND_URL);
+      let cancelled = false;
+      let newSocket;
 
-      newSocket.on('connect', () => {
-        newSocket.emit('join', user.id);
+      getBackendUrl().then((backendUrl) => {
+        if (cancelled) return;
+
+        newSocket = io(backendUrl);
+
+        newSocket.on('connect', () => {
+          newSocket.emit('join', user.id);
+        });
+
+        newSocket.on('online-users', (users) => {
+          setOnlineUsers(users);
+        });
+
+        setSocket(newSocket);
+      }).catch(() => {
+        setSocket(null);
       });
-
-      newSocket.on('online-users', (users) => {
-        setOnlineUsers(users);
-      });
-
-      setSocket(newSocket);
 
       return () => {
-        newSocket.disconnect();
+        cancelled = true;
+        if (newSocket) newSocket.disconnect();
       };
     }
   }, [user]);

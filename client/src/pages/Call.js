@@ -15,6 +15,7 @@ function Call() {
   const {
     callState, remoteUser, callDuration, transcripts,
     isMuted, isSpeaking, isListening, debugLog,
+    localStream, remoteStream, connectionStatus, speechSupported,
     endCall, toggleMute, sendTestMessage
   } = useCall();
   const { user } = useAuth();
@@ -23,6 +24,8 @@ function Call() {
   const [testText, setTestText] = useState('');
   const transcriptEndRef = useRef(null);
   const debugEndRef = useRef(null);
+  const remoteAudioRef = useRef(null);
+  const localAudioRef = useRef(null);
 
   useEffect(() => {
     if (transcriptEndRef.current) {
@@ -35,6 +38,21 @@ function Call() {
       debugEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [debugLog]);
+
+  useEffect(() => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = remoteStream || null;
+      if (remoteStream) {
+        remoteAudioRef.current.play().catch(() => {});
+      }
+    }
+  }, [remoteStream]);
+
+  useEffect(() => {
+    if (localAudioRef.current) {
+      localAudioRef.current.srcObject = localStream || null;
+    }
+  }, [localStream]);
 
   const formatDuration = (seconds) => {
     const m = Math.floor(seconds / 60);
@@ -62,9 +80,26 @@ function Call() {
   const myLang = LANG_NAMES[user?.language] || user?.language || '?';
   const remoteLang = LANG_NAMES[remoteUser?.language] || remoteUser?.language || '?';
 
+  const connectionLabelMap = {
+    idle: 'Idle',
+    'preparing-media': 'Preparing microphone',
+    'media-ready': 'Microphone ready',
+    calling: 'Calling',
+    accepting: 'Accepting',
+    connecting: 'Connecting audio',
+    connected: 'Connected',
+    'connected-media': 'Audio connected',
+    disconnected: 'Disconnected',
+    failed: 'Connection failed',
+    closed: 'Closed'
+  };
+
   return (
     <div className="call-page">
       <div className="call-container">
+        <audio ref={remoteAudioRef} autoPlay playsInline />
+        <audio ref={localAudioRef} autoPlay playsInline muted />
+
         {/* Header */}
         <div className="call-header">
           <div className="call-avatar-large">
@@ -106,6 +141,29 @@ function Call() {
                 PLAYING TRANSLATION
               </span>
             )}
+            <span style={{
+              padding: '4px 10px', borderRadius: '12px', fontSize: '11px',
+              background: remoteStream ? '#22c55e' : '#f59e0b', color: '#fff'
+            }}>
+              AUDIO: {remoteStream ? 'LIVE' : 'WAITING'}
+            </span>
+            <span style={{
+              padding: '4px 10px', borderRadius: '12px', fontSize: '11px',
+              background: '#334155', color: '#fff'
+            }}>
+              LINK: {connectionLabelMap[connectionStatus] || connectionStatus}
+            </span>
+          </div>
+        )}
+
+        {!speechSupported && callState === 'in-call' && (
+          <div className="call-info-box" style={{ marginBottom: '16px' }}>
+            <p>
+              Live audio call is running, but this browser does not support speech recognition.
+            </p>
+            <p>
+              Translation fallback: use the text box below or test in Chrome on Android/Desktop.
+            </p>
           </div>
         )}
 
@@ -217,6 +275,7 @@ function Call() {
           <div className="call-info-box">
             <p>When connected, speak in <strong>{myLang}</strong></p>
             <p>Translation will play as voice in <strong>{remoteLang}</strong></p>
+            <p>Live microphone audio will also flow directly between both callers.</p>
           </div>
         )}
       </div>

@@ -98,12 +98,13 @@ async function generateSpeech(text, voiceId) {
  * Delete a cloned voice from ElevenLabs
  */
 async function deleteVoice(voiceId) {
-  if (!ELEVENLABS_API_KEY || !voiceId) return;
+  const apiKey = getApiKey();
+  if (!apiKey || !voiceId) return;
 
   try {
     await fetch(`${ELEVENLABS_BASE}/voices/${voiceId}`, {
       method: 'DELETE',
-      headers: { 'xi-api-key': ELEVENLABS_API_KEY }
+      headers: { 'xi-api-key': apiKey }
     });
   } catch (err) {
     console.error('Failed to delete voice:', err.message);
@@ -114,11 +115,12 @@ async function deleteVoice(voiceId) {
  * Check remaining character quota
  */
 async function getUsageInfo() {
-  if (!ELEVENLABS_API_KEY) return null;
+  const apiKey = getApiKey();
+  if (!apiKey) return null;
 
   try {
     const response = await fetch(`${ELEVENLABS_BASE}/user/subscription`, {
-      headers: { 'xi-api-key': ELEVENLABS_API_KEY }
+      headers: { 'xi-api-key': apiKey }
     });
     if (!response.ok) return null;
     const data = await response.json();
