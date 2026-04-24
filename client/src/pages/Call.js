@@ -16,7 +16,7 @@ function Call() {
     callState, remoteUser, callDuration, transcripts,
     isMuted, isSpeaking, isListening, debugLog,
     localStream, remoteStream, connectionStatus, speechSupported,
-    endCall, toggleMute, sendTestMessage
+    endCall, toggleMute, sendTestMessage, setTranslationAudioElement
   } = useCall();
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -99,6 +99,7 @@ function Call() {
       <div className="call-container">
         <audio ref={remoteAudioRef} autoPlay playsInline />
         <audio ref={localAudioRef} autoPlay playsInline muted />
+        <audio ref={setTranslationAudioElement} autoPlay playsInline />
 
         {/* Header */}
         <div className="call-header">

@@ -61,6 +61,7 @@ export function CallProvider({ children }) {
   const processedResultsRef = useRef(0);
   const ttsQueueRef = useRef([]);
   const isTTSPlayingRef = useRef(false);
+  const translationAudioElementRef = useRef(null);
 
   useEffect(() => { callDurationRef.current = callDuration; }, [callDuration]);
   useEffect(() => { remoteUserRef.current = remoteUser; }, [remoteUser]);
@@ -108,6 +109,30 @@ export function CallProvider({ children }) {
     }
   }, [addDebug]);
 
+  const setTranslationAudioElement = useCallback((element) => {
+    translationAudioElementRef.current = element || null;
+  }, []);
+
+  const unlockTranslationAudio = useCallback(async () => {
+    const element = translationAudioElementRef.current;
+    if (!element) return;
+
+    try {
+      element.muted = true;
+      element.src = '';
+      const maybePromise = element.play();
+      if (maybePromise?.then) {
+        await maybePromise;
+      }
+      element.pause();
+      element.currentTime = 0;
+      element.muted = false;
+      addDebug('Translation audio unlocked');
+    } catch (err) {
+      addDebug(`Translation audio unlock skipped: ${err.message}`);
+    }
+  }, [addDebug]);
+
   const processNextTTS = useCallback(() => {
     if (isTTSPlayingRef.current || ttsQueueRef.current.length === 0) return;
 
@@ -123,11 +148,24 @@ export function CallProvider({ children }) {
 
     if (audioBase64) {
       try {
-        const audio = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
-        audio.volume = 1;
-        audio.onended = finish;
-        audio.onerror = () => fallbackBrowserTTS(text, lang, finish);
-        audio.play().catch(() => fallbackBrowserTTS(text, lang, finish));
+        const element = translationAudioElementRef.current;
+        if (!element) {
+          throw new Error('translation audio element not ready');
+        }
+
+        element.pause();
+        element.currentTime = 0;
+        element.src = `data:audio/mpeg;base64,${audioBase64}`;
+        element.volume = 1;
+        element.onended = finish;
+        element.onerror = () => fallbackBrowserTTS(text, lang, finish);
+
+        element.play()
+          .then(() => addDebug(`Playing translated audio (${lang})`))
+          .catch((err) => {
+            addDebug(`Translated audio autoplay blocked: ${err.message}`);
+            fallbackBrowserTTS(text, lang, finish);
+          });
       } catch (err) {
         addDebug(`Server audio playback failed: ${err.message}`);
         fallbackBrowserTTS(text, lang, finish);
@@ -442,6 +480,7 @@ export function CallProvider({ children }) {
       callMetaRef.current = { type: 'outgoing', logged: false, connected: false };
       ttsQueueRef.current = [];
       isTTSPlayingRef.current = false;
+      await unlockTranslationAudio();
 
       const pc = await createPeerConnection(contact.userId);
       const offer = await pc.createOffer({
@@ -464,7 +503,7 @@ export function CallProvider({ children }) {
       alert(`Could not start the call: ${err.message}`);
       resetCallState();
     }
-  }, [addDebug, createPeerConnection, resetCallState]);
+  }, [addDebug, createPeerConnection, resetCallState, unlockTranslationAudio]);
 
   const acceptCall = useCallback(async (callData) => {
     if (!socketRef.current || !userRef.current) return;
@@ -485,6 +524,7 @@ export function CallProvider({ children }) {
       callMetaRef.current = { type: 'incoming', logged: false, connected: true };
       ttsQueueRef.current = [];
       isTTSPlayingRef.current = false;
+      await unlockTranslationAudio();
 
       const pc = await createPeerConnection(callData.from);
       await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
@@ -510,7 +550,7 @@ export function CallProvider({ children }) {
       alert(`Could not accept the call: ${err.message}`);
       resetCallState();
     }
-  }, [addDebug, createPeerConnection, flushPendingCandidates, resetCallState, startSpeechRecognition, startTimer]);
+  }, [addDebug, createPeerConnection, flushPendingCandidates, resetCallState, startSpeechRecognition, startTimer, unlockTranslationAudio]);
 
   const rejectCall = useCallback((callData) => {
     if (socketRef.current) {
@@ -608,6 +648,7 @@ export function CallProvider({ children }) {
     };
 
     const onTextTranslated = ({ original, translated, toLang, audio }) => {
+      addDebug(`Translated text received (${toLang})${audio ? ' with audio' : ' without audio'}`);
       setTranscripts(prev => [...prev, {
         type: 'remote',
         text: original,
@@ -706,6 +747,7 @@ export function CallProvider({ children }) {
         timestamp: Date.now()
       }]);
     },
+    setTranslationAudioElement,
     setRemoteUser,
     setCallState
   };
