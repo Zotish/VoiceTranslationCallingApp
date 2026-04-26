@@ -62,6 +62,13 @@ export function CallProvider({ children }) {
   const ttsQueueRef = useRef([]);
   const isTTSPlayingRef = useRef(false);
   const translationAudioElementRef = useRef(null);
+  const recognitionRestartTimeoutRef = useRef(null);
+  const recognitionWatchdogIntervalRef = useRef(null);
+  const recognitionStartLockRef = useRef(false);
+  const speechDispatchStateRef = useRef({
+    silenceTimer: null,
+    lastSentNormalized: ''
+  });
 
   useEffect(() => { callDurationRef.current = callDuration; }, [callDuration]);
   useEffect(() => { remoteUserRef.current = remoteUser; }, [remoteUser]);
@@ -86,6 +93,65 @@ export function CallProvider({ children }) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+  }, []);
+
+  const clearSpeechDispatchTimer = useCallback(() => {
+    if (speechDispatchStateRef.current.silenceTimer) {
+      window.clearTimeout(speechDispatchStateRef.current.silenceTimer);
+      speechDispatchStateRef.current.silenceTimer = null;
+    }
+  }, []);
+
+  const clearRecognitionRestartTimer = useCallback(() => {
+    if (recognitionRestartTimeoutRef.current) {
+      window.clearTimeout(recognitionRestartTimeoutRef.current);
+      recognitionRestartTimeoutRef.current = null;
+    }
+  }, []);
+
+  const normalizeTranscript = useCallback((text) => (
+    String(text || '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  ), []);
+
+  const splitTranslationChunks = useCallback((text) => {
+    const cleaned = String(text || '').trim();
+    if (!cleaned) return [];
+
+    const sentenceParts = cleaned
+      .split(/(?<=[.!?,;:।!?])/u)
+      .map(part => part.trim())
+      .filter(Boolean);
+
+    const sourceParts = sentenceParts.length > 0 ? sentenceParts : [cleaned];
+    const chunks = [];
+
+    sourceParts.forEach((part) => {
+      if (part.length <= 120) {
+        chunks.push(part);
+        return;
+      }
+
+      const words = part.split(/\s+/);
+      let current = '';
+
+      words.forEach((word) => {
+        const next = current ? `${current} ${word}` : word;
+        if (next.length > 120 && current) {
+          chunks.push(current);
+          current = word;
+        } else {
+          current = next;
+        }
+      });
+
+      if (current) chunks.push(current);
+    });
+
+    return chunks;
   }, []);
 
   const fallbackBrowserTTS = useCallback((text, lang, onDone) => {
@@ -187,6 +253,49 @@ export function CallProvider({ children }) {
     ttsQueueRef.current.push({ text, lang, audioBase64 });
     processNextTTS();
   }, [processNextTTS]);
+
+  const dispatchTranslation = useCallback((text, myLang, targetLang, remoteId, { force = false } = {}) => {
+    const normalized = normalizeTranscript(text);
+    if (!normalized || normalized.length < 2) return false;
+
+    if (!force && normalized === speechDispatchStateRef.current.lastSentNormalized) {
+      return false;
+    }
+
+    const chunks = splitTranslationChunks(text);
+    if (chunks.length === 0) return false;
+
+    speechDispatchStateRef.current.lastSentNormalized = normalized;
+    clearSpeechDispatchTimer();
+
+    setTranscripts(prev => [...prev, {
+      type: 'you',
+      text,
+      lang: myLang,
+      timestamp: Date.now()
+    }]);
+
+    chunks.forEach((chunk) => {
+      socketRef.current?.emit('translate-text', {
+        text: chunk,
+        fromLang: myLang,
+        toLang: targetLang,
+        to: remoteId
+      });
+    });
+
+    addDebug(`Translation sent in ${chunks.length} chunk${chunks.length > 1 ? 's' : ''}`);
+    return true;
+  }, [addDebug, clearSpeechDispatchTimer, normalizeTranscript, splitTranslationChunks]);
+
+  const scheduleSpeechDispatch = useCallback((text, myLang, targetLang, remoteId) => {
+    clearSpeechDispatchTimer();
+    if (!text || !text.trim()) return;
+
+    speechDispatchStateRef.current.silenceTimer = window.setTimeout(() => {
+      dispatchTranslation(text, myLang, targetLang, remoteId);
+    }, 850);
+  }, [clearSpeechDispatchTimer, dispatchTranslation]);
 
   const ensureLocalStream = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
@@ -295,8 +404,14 @@ export function CallProvider({ children }) {
   }, [addDebug, cleanupPeerConnection, ensureLocalStream]);
 
   const stopSpeechRecognition = useCallback(() => {
+    clearRecognitionRestartTimer();
+    clearSpeechDispatchTimer();
+    recognitionStartLockRef.current = false;
+
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
+      recognitionRef.current.onerror = null;
+      recognitionRef.current.onresult = null;
       try {
         recognitionRef.current.stop();
       } catch {
@@ -305,9 +420,10 @@ export function CallProvider({ children }) {
       recognitionRef.current = null;
     }
     setIsListening(false);
-  }, []);
+  }, [clearRecognitionRestartTimer, clearSpeechDispatchTimer]);
 
   const startSpeechRecognition = useCallback(async (myLang, targetLang, remoteId) => {
+    if (recognitionStartLockRef.current) return;
     callParamsRef.current = { myLang, remoteLang: targetLang, remoteId };
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -318,76 +434,84 @@ export function CallProvider({ children }) {
     }
 
     setSpeechSupported(true);
+    clearRecognitionRestartTimer();
+    recognitionStartLockRef.current = true;
 
     try {
       await ensureLocalStream();
     } catch (err) {
+      recognitionStartLockRef.current = false;
       addDebug(`Microphone unavailable for translation: ${err.message}`);
       return;
     }
 
     stopSpeechRecognition();
+    recognitionStartLockRef.current = true;
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = false;
+    recognition.interimResults = true;
     recognition.lang = getLangCode(myLang);
     recognition.maxAlternatives = 1;
 
     processedResultsRef.current = 0;
-    let restartAttempts = 0;
 
     recognition.onstart = () => {
+      recognitionStartLockRef.current = false;
       setIsListening(true);
-      restartAttempts = 0;
       addDebug(`Speech recognition active: ${myLang} -> ${targetLang}`);
     };
 
     recognition.onresult = (event) => {
+      let latestInterim = '';
+
       for (let i = processedResultsRef.current; i < event.results.length; i += 1) {
         const result = event.results[i];
-        if (!result.isFinal) continue;
-
-        processedResultsRef.current = i + 1;
         const text = result[0]?.transcript?.trim();
         if (!text || text.length < 2) continue;
 
-        setTranscripts(prev => [...prev, {
-          type: 'you',
-          text,
-          lang: myLang,
-          timestamp: Date.now()
-        }]);
-
-        if (socketRef.current?.connected) {
-          socketRef.current.emit('translate-text', {
-            text,
-            fromLang: myLang,
-            toLang: targetLang,
-            to: remoteId
-          });
+        if (result.isFinal) {
+          processedResultsRef.current = i + 1;
+          dispatchTranslation(text, myLang, targetLang, remoteId);
+          latestInterim = '';
+        } else {
+          latestInterim = text;
         }
+      }
+
+      if (latestInterim) {
+        scheduleSpeechDispatch(latestInterim, myLang, targetLang, remoteId);
       }
     };
 
     recognition.onerror = (event) => {
-      if (event.error !== 'aborted' && event.error !== 'no-speech') {
+      recognitionStartLockRef.current = false;
+
+      if (event.error !== 'aborted') {
         addDebug(`Speech recognition error: ${event.error}`);
+      }
+
+      if (callStateRef.current === 'in-call' && !isMuted) {
+        clearRecognitionRestartTimer();
+        recognitionRestartTimeoutRef.current = window.setTimeout(() => {
+          const params = callParamsRef.current;
+          if (!params || callStateRef.current !== 'in-call' || isMuted) return;
+          startSpeechRecognition(params.myLang, params.remoteLang, params.remoteId);
+        }, event.error === 'no-speech' ? 400 : 900);
       }
     };
 
     recognition.onend = () => {
+      recognitionRef.current = null;
+      recognitionStartLockRef.current = false;
       setIsListening(false);
 
-      if (callStateRef.current === 'in-call' && !isMuted && restartAttempts < 20) {
-        restartAttempts += 1;
-        window.setTimeout(() => {
-          if (callStateRef.current !== 'in-call' || isMuted) return;
-          try {
-            recognition.start();
-          } catch (err) {
-            addDebug(`Speech recognition restart failed: ${err.message}`);
-          }
+      if (callStateRef.current === 'in-call' && !isMuted) {
+        clearRecognitionRestartTimer();
+        recognitionRestartTimeoutRef.current = window.setTimeout(() => {
+          const params = callParamsRef.current;
+          if (!params || callStateRef.current !== 'in-call' || isMuted) return;
+          startSpeechRecognition(params.myLang, params.remoteLang, params.remoteId);
         }, 500);
       }
     };
@@ -396,9 +520,18 @@ export function CallProvider({ children }) {
       recognition.start();
       recognitionRef.current = recognition;
     } catch (err) {
+      recognitionStartLockRef.current = false;
       addDebug(`Speech recognition start failed: ${err.message}`);
     }
-  }, [addDebug, ensureLocalStream, isMuted, stopSpeechRecognition]);
+  }, [
+    addDebug,
+    clearRecognitionRestartTimer,
+    dispatchTranslation,
+    ensureLocalStream,
+    isMuted,
+    scheduleSpeechDispatch,
+    stopSpeechRecognition
+  ]);
 
   const logCompletedCall = useCallback(async () => {
     const remote = remoteUserRef.current;
@@ -435,6 +568,9 @@ export function CallProvider({ children }) {
     window.speechSynthesis.cancel();
     ttsQueueRef.current = [];
     isTTSPlayingRef.current = false;
+    clearSpeechDispatchTimer();
+    clearRecognitionRestartTimer();
+    speechDispatchStateRef.current.lastSentNormalized = '';
     cleanupPeerConnection();
     cleanupMedia();
 
@@ -453,7 +589,7 @@ export function CallProvider({ children }) {
     callStateRef.current = 'idle';
     callParamsRef.current = null;
     callMetaRef.current = null;
-  }, [cleanupMedia, cleanupPeerConnection, stopSpeechRecognition, stopTimer]);
+  }, [cleanupMedia, cleanupPeerConnection, clearRecognitionRestartTimer, clearSpeechDispatchTimer, stopSpeechRecognition, stopTimer]);
 
   const endCall = useCallback(async ({ notifyRemote = true } = {}) => {
     await logCompletedCall();
@@ -647,8 +783,8 @@ export function CallProvider({ children }) {
       }
     };
 
-    const onTextTranslated = ({ original, translated, toLang, audio }) => {
-      addDebug(`Translated text received (${toLang})${audio ? ' with audio' : ' without audio'}`);
+    const onTextTranslated = ({ original, translated, toLang, audio, voiceSource }) => {
+      addDebug(`Translated text received (${toLang}) via ${voiceSource || 'unknown'}${audio ? ' with audio' : ' without audio'}`);
       setTranscripts(prev => [...prev, {
         type: 'remote',
         text: original,
@@ -659,11 +795,14 @@ export function CallProvider({ children }) {
       queueTTS(translated, toLang, audio || null);
     };
 
-    const onTranslationSent = ({ original, translated }) => {
+    const onTranslationSent = ({ original, translated, voiceSource }) => {
       setTranscripts(prev => {
         const next = [...prev];
         const match = [...next].reverse().find(item => item.type === 'you' && item.text === original);
-        if (match) match.translated = translated;
+        if (match) {
+          match.translated = translated;
+          match.voiceSource = voiceSource;
+        }
         return [...next];
       });
     };
@@ -707,6 +846,31 @@ export function CallProvider({ children }) {
     cleanupPeerConnection();
     cleanupMedia();
   }, [cleanupMedia, cleanupPeerConnection]);
+
+  useEffect(() => {
+    if (callState !== 'in-call' || isMuted) {
+      if (recognitionWatchdogIntervalRef.current) {
+        window.clearInterval(recognitionWatchdogIntervalRef.current);
+        recognitionWatchdogIntervalRef.current = null;
+      }
+      return undefined;
+    }
+
+    recognitionWatchdogIntervalRef.current = window.setInterval(() => {
+      const params = callParamsRef.current;
+      if (!params || recognitionRef.current || recognitionStartLockRef.current || isListening) return;
+
+      addDebug('Translation watchdog restarting speech recognition');
+      startSpeechRecognition(params.myLang, params.remoteLang, params.remoteId);
+    }, 2500);
+
+    return () => {
+      if (recognitionWatchdogIntervalRef.current) {
+        window.clearInterval(recognitionWatchdogIntervalRef.current);
+        recognitionWatchdogIntervalRef.current = null;
+      }
+    };
+  }, [addDebug, callState, isListening, isMuted, startSpeechRecognition]);
 
   const value = {
     callState,

@@ -180,9 +180,23 @@ io.on('connection', (socket) => {
 
       let audioBase64 = null;
       let voiceCloned = false;
+      let voiceSource = 'none';
 
       // 1. Try ElevenLabs cloned voice first (speaker's voice!)
-      const speakerVoiceId = userVoiceCache.get(socket.userId);
+      let speakerVoiceId = userVoiceCache.get(socket.userId);
+      if (!speakerVoiceId && socket.userId) {
+        try {
+          const speaker = await User.findById(socket.userId).select('voiceId');
+          if (speaker?.voiceId) {
+            speakerVoiceId = speaker.voiceId;
+            userVoiceCache.set(socket.userId, speaker.voiceId);
+            console.log(`🎤 Restored cloned voice from DB: ${speaker.voiceId}`);
+          }
+        } catch (err) {
+          console.error('Voice DB lookup failed:', err.message);
+        }
+      }
+
       if (speakerVoiceId) {
         try {
           console.log(`🎤 Using cloned voice: ${speakerVoiceId}`);
@@ -190,6 +204,7 @@ io.on('connection', (socket) => {
           if (audioBuffer) {
             audioBase64 = audioBuffer.toString('base64');
             voiceCloned = true;
+            voiceSource = 'clone';
             console.log(`🔊 Cloned voice audio: ${audioBase64.length} chars`);
           }
         } catch (err) {
@@ -202,6 +217,7 @@ io.on('connection', (socket) => {
         try {
           audioBase64 = await generateTTS(translated, toLang);
           if (audioBase64) {
+            voiceSource = 'tts';
             console.log(`🔊 Google TTS audio: ${audioBase64.length} chars`);
           }
         } catch (err) {
@@ -217,12 +233,13 @@ io.on('connection', (socket) => {
           fromLang,
           toLang,
           audio: audioBase64,
-          voiceCloned
+          voiceCloned,
+          voiceSource
         });
       }
 
       // Confirmation to sender
-      socket.emit('translation-sent', { original: text, translated, fromLang, toLang });
+      socket.emit('translation-sent', { original: text, translated, fromLang, toLang, voiceSource });
     } catch (err) {
       console.error('Translation error:', err);
       socket.emit('translation-error', { message: 'Translation failed' });
