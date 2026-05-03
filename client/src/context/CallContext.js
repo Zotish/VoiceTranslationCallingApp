@@ -496,13 +496,25 @@ export function CallProvider({ children }) {
     recognitionStartLockRef.current = true;
 
     try {
-      await ensureLocalStream();
+      const stream = await ensureLocalStream();
+      
+      // MOBILE MIC HANDSHAKE:
+      // On Android, if WebRTC is active, SpeechRecognition often fails to start.
+      // We briefly disable the audio track to "release" the lock and let the OS share it.
+      if (isMobile && stream) {
+        stream.getAudioTracks().forEach(track => { track.enabled = false; });
+        addDebug('Mobile Mic Handshake: Releasing WebRTC track briefly...');
+      }
+
       // Force AudioContext resume for mobile
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (AudioContext) {
         const tempCtx = new AudioContext();
         if (tempCtx.state === 'suspended') await tempCtx.resume();
       }
+      
+      // Wait a tiny bit for the OS to register the track release
+      if (isMobile) await new Promise(r => setTimeout(r, 150));
     } catch (err) {
       recognitionStartLockRef.current = false;
       addDebug(`Microphone unavailable for translation: ${err.message}`);
@@ -513,8 +525,9 @@ export function CallProvider({ children }) {
     recognitionStartLockRef.current = true;
 
     const recognition = new SpeechRecognition();
-    // On some mobile devices, continuous=true causes issues, but we try to keep it for better UX
-    recognition.continuous = true;
+    // MOBILE OPTIMIZATION: On some Androids, continuous:true is the cause of the lock.
+    // If it's mobile, we use continuous:false which is much more stable.
+    recognition.continuous = !isMobile; 
     recognition.interimResults = true;
     recognition.lang = getLangCode(myLang);
     recognition.maxAlternatives = 1;
@@ -525,6 +538,14 @@ export function CallProvider({ children }) {
       recognitionStartLockRef.current = false;
       setIsListening(true);
       addDebug(`Speech recognition active: ${myLang} -> ${targetLang}`);
+      
+      // RE-ENABLE WebRTC track after recognition has successfully started
+      if (isMobile && localStreamRef.current) {
+        localStreamRef.current.getAudioTracks().forEach(track => { 
+          if (!isMuted) track.enabled = true; 
+        });
+        addDebug('Mobile Mic Handshake: WebRTC track re-enabled');
+      }
     };
 
     recognition.onresult = (event) => {
