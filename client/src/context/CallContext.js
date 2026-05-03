@@ -67,9 +67,48 @@ export function CallProvider({ children }) {
   const ttsQueueRef = useRef([]);
   const isTTSPlayingRef = useRef(false);
   const translationAudioElementRef = useRef(null);
+  const comfortNoiseRef = useRef(null);
   const recognitionRestartTimeoutRef = useRef(null);
   const recognitionWatchdogIntervalRef = useRef(null);
   const recognitionStartLockRef = useRef(false);
+
+  // ... rest of the state ...
+
+  const startComfortNoise = useCallback(() => {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1, ctx.currentTime); // Inaudible frequency
+      gain.gain.setValueAtTime(0.001, ctx.currentTime); // Tiny volume
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+
+      comfortNoiseRef.current = { ctx, osc };
+      addDebug('Silent comfort noise started to keep connection alive');
+    } catch (err) {
+      console.warn('Comfort noise failed:', err);
+    }
+  }, [addDebug]);
+
+  const stopComfortNoise = useCallback(() => {
+    if (comfortNoiseRef.current) {
+      try {
+        comfortNoiseRef.current.osc.stop();
+        comfortNoiseRef.current.ctx.close();
+      } catch (err) {
+        // ignore
+      }
+      comfortNoiseRef.current = null;
+    }
+  }, []);
   const speechDispatchStateRef = useRef({
     silenceTimer: null,
     lastSentNormalized: ''
@@ -578,6 +617,7 @@ export function CallProvider({ children }) {
   const resetCallState = useCallback(({ keepDebug = false } = {}) => {
     stopTimer();
     stopSpeechRecognition();
+    stopComfortNoise();
     window.speechSynthesis.cancel();
     ttsQueueRef.current = [];
     isTTSPlayingRef.current = false;
@@ -602,7 +642,7 @@ export function CallProvider({ children }) {
     callStateRef.current = 'idle';
     callParamsRef.current = null;
     callMetaRef.current = null;
-  }, [cleanupMedia, cleanupPeerConnection, clearRecognitionRestartTimer, clearSpeechDispatchTimer, stopSpeechRecognition, stopTimer]);
+  }, [cleanupMedia, cleanupPeerConnection, clearRecognitionRestartTimer, clearSpeechDispatchTimer, stopSpeechRecognition, stopTimer, stopComfortNoise]);
 
   const endCall = useCallback(async ({ notifyRemote = true } = {}) => {
     await logCompletedCall();
@@ -630,6 +670,7 @@ export function CallProvider({ children }) {
       ttsQueueRef.current = [];
       isTTSPlayingRef.current = false;
       await unlockTranslationAudio();
+      startComfortNoise();
 
       const pc = await createPeerConnection(contact.userId);
       const offer = await pc.createOffer({
@@ -652,7 +693,7 @@ export function CallProvider({ children }) {
       alert(`Could not start the call: ${err.message}`);
       resetCallState();
     }
-  }, [addDebug, createPeerConnection, resetCallState, unlockTranslationAudio]);
+  }, [addDebug, createPeerConnection, resetCallState, unlockTranslationAudio, startComfortNoise]);
 
   const acceptCall = useCallback(async (callData) => {
     if (!socketRef.current || !userRef.current) return;
@@ -674,6 +715,7 @@ export function CallProvider({ children }) {
       ttsQueueRef.current = [];
       isTTSPlayingRef.current = false;
       await unlockTranslationAudio();
+      startComfortNoise();
 
       const pc = await createPeerConnection(callData.from);
       await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
@@ -699,7 +741,7 @@ export function CallProvider({ children }) {
       alert(`Could not accept the call: ${err.message}`);
       resetCallState();
     }
-  }, [addDebug, createPeerConnection, flushPendingCandidates, resetCallState, startSpeechRecognition, startTimer, unlockTranslationAudio]);
+  }, [addDebug, createPeerConnection, flushPendingCandidates, resetCallState, startSpeechRecognition, startTimer, unlockTranslationAudio, startComfortNoise]);
 
   const rejectCall = useCallback((callData) => {
     if (socketRef.current) {

@@ -228,15 +228,25 @@ io.on('connection', (socket) => {
 
       // Send to receiver WITH audio
       if (to) {
-        io.to(to).emit('text-translated', {
-          original: text,
-          translated,
-          fromLang,
-          toLang,
-          audio: audioBase64,
-          voiceCloned,
-          voiceSource
-        });
+        const room = io.sockets.adapter.rooms.get(to);
+        const isOnline = room && room.size > 0;
+        
+        console.log(`📡 [${new Date().toISOString()}] Sending to room ${to} | Recipient Online: ${isOnline ? 'YES' : 'NO'}`);
+        
+        if (isOnline) {
+          io.to(to).emit('text-translated', {
+            original: text,
+            translated,
+            fromLang,
+            toLang,
+            audio: audioBase64,
+            voiceCloned,
+            voiceSource
+          });
+        } else {
+          console.warn(`⚠️ [${new Date().toISOString()}] Target user ${to} is offline or room is empty. Translation not delivered.`);
+          socket.emit('translation-error', { message: 'Recipient is currently disconnected. Translation might be delayed.' });
+        }
       }
 
       // Confirmation to sender

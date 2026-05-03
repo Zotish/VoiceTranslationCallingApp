@@ -22,14 +22,23 @@ export function SocketProvider({ children }) {
       getBackendUrl().then((backendUrl) => {
         if (cancelled) return;
 
-        newSocket = io(backendUrl);
+        // Force WebSocket for better real-time performance and stability
+        newSocket = io(backendUrl, {
+          transports: ['websocket'],
+          upgrade: false,
+          reconnection: true,
+          reconnectionAttempts: Infinity,
+          reconnectionDelay: 1000,
+        });
 
         newSocket.on('connect', () => {
+          console.log('Socket connected:', newSocket.id);
           newSocket.emit('join', user.id);
         });
 
-        newSocket.on('online-users', (users) => {
-          setOnlineUsers(users);
+        newSocket.on('reconnect', () => {
+          console.log('Socket reconnected, re-joining room...');
+          newSocket.emit('join', user.id);
         });
 
         setSocket(newSocket);
