@@ -54,7 +54,8 @@ function Call() {
   useEffect(() => {
     if (!remoteAudioRef.current) return;
 
-    const targetVolume = muteOriginal ? 0 : (isSpeaking ? 0.15 : 1.0);
+    // Default to 10% volume for original voice, or 0 if muted
+    const targetVolume = muteOriginal ? 0 : (isSpeaking ? 0.05 : 0.15);
     const currentVolume = remoteAudioRef.current.volume;
     
     if (Math.abs(currentVolume - targetVolume) < 0.01) return;

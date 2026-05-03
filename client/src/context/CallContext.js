@@ -342,7 +342,7 @@ export function CallProvider({ children }) {
 
     speechDispatchStateRef.current.silenceTimer = window.setTimeout(() => {
       dispatchTranslation(text, myLang, targetLang, remoteId);
-    }, 850);
+    }, 1500); // Increased from 850ms to 1.5s for more natural speech
   }, [clearSpeechDispatchTimer, dispatchTranslation]);
 
   const ensureLocalStream = useCallback(async () => {
@@ -517,6 +517,9 @@ export function CallProvider({ children }) {
     };
 
     recognition.onresult = (event) => {
+      // If we are currently playing a translation, ignore results to prevent echo loop
+      if (isSpeaking) return;
+
       let latestInterim = '';
 
       for (let i = processedResultsRef.current; i < event.results.length; i += 1) {
@@ -927,7 +930,7 @@ export function CallProvider({ children }) {
 
       addDebug('Translation watchdog restarting speech recognition');
       startSpeechRecognition(params.myLang, params.remoteLang, params.remoteId);
-    }, 2500);
+    }, 4000); // Increased from 2500ms to 4000ms
 
     return () => {
       if (recognitionWatchdogIntervalRef.current) {
