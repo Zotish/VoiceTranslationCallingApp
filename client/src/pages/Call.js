@@ -23,7 +23,7 @@ function Call() {
   const navigate = useNavigate();
   const [showDebug, setShowDebug] = useState(false);
   const [testText, setTestText] = useState('');
-  const [muteOriginal, setMuteOriginal] = useState(false);
+  const [muteOriginal, setMuteOriginal] = useState(true); // Default to TRUE for production feel
   const transcriptEndRef = useRef(null);
   const debugEndRef = useRef(null);
   const remoteAudioRef = useRef(null);
@@ -54,8 +54,8 @@ function Call() {
   useEffect(() => {
     if (!remoteAudioRef.current) return;
 
-    // Default to 10% volume for original voice, or 0 if muted
-    const targetVolume = muteOriginal ? 0 : (isSpeaking ? 0.05 : 0.15);
+    // Default to 0 volume for original voice to prevent "leakage" before translation
+    const targetVolume = muteOriginal ? 0 : (isSpeaking ? 0.02 : 0.1);
     const currentVolume = remoteAudioRef.current.volume;
     
     if (Math.abs(currentVolume - targetVolume) < 0.01) return;

@@ -487,12 +487,22 @@ export function CallProvider({ children }) {
       return;
     }
 
+    // Detect if we are on a mobile device
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) addDebug('Mobile device detected - applying speech optimizations');
+
     setSpeechSupported(true);
     clearRecognitionRestartTimer();
     recognitionStartLockRef.current = true;
 
     try {
       await ensureLocalStream();
+      // Force AudioContext resume for mobile
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (AudioContext) {
+        const tempCtx = new AudioContext();
+        if (tempCtx.state === 'suspended') await tempCtx.resume();
+      }
     } catch (err) {
       recognitionStartLockRef.current = false;
       addDebug(`Microphone unavailable for translation: ${err.message}`);
@@ -503,6 +513,7 @@ export function CallProvider({ children }) {
     recognitionStartLockRef.current = true;
 
     const recognition = new SpeechRecognition();
+    // On some mobile devices, continuous=true causes issues, but we try to keep it for better UX
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = getLangCode(myLang);
@@ -552,11 +563,13 @@ export function CallProvider({ children }) {
 
       if (callStateRef.current === 'in-call' && !isMuted) {
         clearRecognitionRestartTimer();
+        // Faster restart for mobile on errors
+        const delay = isMobile ? 300 : (event.error === 'no-speech' ? 400 : 900);
         recognitionRestartTimeoutRef.current = window.setTimeout(() => {
           const params = callParamsRef.current;
           if (!params || callStateRef.current !== 'in-call' || isMuted) return;
           startSpeechRecognition(params.myLang, params.remoteLang, params.remoteId);
-        }, event.error === 'no-speech' ? 400 : 900);
+        }, delay);
       }
     };
 
@@ -567,11 +580,14 @@ export function CallProvider({ children }) {
 
       if (callStateRef.current === 'in-call' && !isMuted) {
         clearRecognitionRestartTimer();
+        // Very aggressive restart for mobile when recognition ends naturally
+        const delay = isMobile ? 100 : 500;
         recognitionRestartTimeoutRef.current = window.setTimeout(() => {
           const params = callParamsRef.current;
           if (!params || callStateRef.current !== 'in-call' || isMuted) return;
+          addDebug('Auto-restarting speech recognition (end-of-session)');
           startSpeechRecognition(params.myLang, params.remoteLang, params.remoteId);
-        }, 500);
+        }, delay);
       }
     };
 
