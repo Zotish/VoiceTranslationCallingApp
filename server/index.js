@@ -174,8 +174,12 @@ io.on('connection', (socket) => {
   socket.on('translate-text', async ({ text, fromLang, toLang, to }) => {
     try {
       if (!text || text.trim().length < 2) return;
+      if (!to) {
+        console.warn(`⚠️ [${new Date().toISOString()}] translate-text received without target 'to' user ID`);
+        return;
+      }
 
-      console.log(`🔄 [${new Date().toISOString()}] Translate: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}" | ${fromLang}→${toLang}`);
+      console.log(`🔄 [${new Date().toISOString()}] Translate from ${socket.userId} to ${to}: "${text.substring(0, 30)}..."`);
 
       const translated = await translateText(text, fromLang, toLang);
 

@@ -8,8 +8,12 @@ const CallContext = createContext();
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
+  ],
+  iceCandidatePoolSize: 10
 };
 
 const LANG_MAP = {
@@ -377,12 +381,14 @@ export function CallProvider({ children }) {
     };
 
     pc.ontrack = (event) => {
-      event.streams[0].getTracks().forEach(track => {
-        remoteMedia.addTrack(track);
-      });
-      setRemoteStream(new MediaStream(remoteMedia.getTracks()));
+      addDebug(`Remote track received: ${event.track.kind}`);
+      
+      // Use the first stream provided, or create one if missing
+      const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
+      
+      // Update remote stream state with a new reference to ensure re-render
+      setRemoteStream(new MediaStream(stream.getTracks()));
       setConnectionStatus('connected-media');
-      addDebug('Remote audio track received');
     };
 
     pc.onconnectionstatechange = () => {
@@ -391,7 +397,11 @@ export function CallProvider({ children }) {
       addDebug(`Peer connection state: ${state}`);
 
       if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-        setIsListening(false);
+        // Don't immediately stop listening, let the watchdog try to recover
+        // unless it's a permanent failure
+        if (state === 'failed' || state === 'closed') {
+          setIsListening(false);
+        }
       }
     };
 
@@ -826,6 +836,10 @@ export function CallProvider({ children }) {
       resetCallState();
     };
 
+    const onTranslationError = ({ message }) => {
+      addDebug(`⚠️ Translation Error from Server: ${message}`);
+    };
+
     socket.on('call-accepted', onCallAccepted);
     socket.on('ice-candidate', onIceCandidate);
     socket.on('call-rejected', onCallRejected);
@@ -833,6 +847,7 @@ export function CallProvider({ children }) {
     socket.on('text-translated', onTextTranslated);
     socket.on('translation-sent', onTranslationSent);
     socket.on('call-failed', onCallFailed);
+    socket.on('translation-error', onTranslationError);
 
     return () => {
       socket.off('call-accepted', onCallAccepted);
@@ -842,6 +857,7 @@ export function CallProvider({ children }) {
       socket.off('text-translated', onTextTranslated);
       socket.off('translation-sent', onTranslationSent);
       socket.off('call-failed', onCallFailed);
+      socket.off('translation-error', onTranslationError);
     };
   }, [addDebug, endCall, flushPendingCandidates, queueTTS, resetCallState, socket, startSpeechRecognition, startTimer]);
 
