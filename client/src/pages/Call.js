@@ -129,7 +129,7 @@ function Call() {
   return (
     <div className="call-page">
       <div className="call-container">
-        <audio ref={remoteAudioRef} autoPlay playsInline />
+        <audio ref={remoteAudioRef} autoPlay playsInline muted={muteOriginal} />
         <audio ref={localAudioRef} autoPlay playsInline muted />
         <audio ref={setTranslationAudioElement} autoPlay playsInline />
 

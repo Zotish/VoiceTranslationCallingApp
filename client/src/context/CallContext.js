@@ -426,6 +426,12 @@ export function CallProvider({ children }) {
     pc.ontrack = (event) => {
       addDebug(`Remote track received: ${event.track.kind}`);
       
+      // If we want to mute original, disable the track at the source level
+      if (callStateRef.current === 'in-call' || callStateRef.current === 'connecting') {
+          // We can't easily check muteOriginal state here without a ref, 
+          // but the <audio muted={muteOriginal}> handles the volume.
+      }
+
       // Use the first stream provided, or create one if missing
       const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
       
@@ -490,6 +496,15 @@ export function CallProvider({ children }) {
     // Detect if we are on a mobile device
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     if (isMobile) addDebug('Mobile device detected - applying speech optimizations');
+
+    // On mobile, the WebRTC audio track often conflicts with SpeechRecognition.
+    // If we are on mobile, we FORCE DISABLE the WebRTC mic track to let STT work.
+    if (isMobile && localStreamRef.current) {
+        localStreamRef.current.getAudioTracks().forEach(track => {
+            track.enabled = false;
+        });
+        addDebug('Mobile Mic Liberation: WebRTC mic track disabled to allow translation');
+    }
 
     setSpeechSupported(true);
     clearRecognitionRestartTimer();
