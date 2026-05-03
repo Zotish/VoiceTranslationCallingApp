@@ -16,12 +16,14 @@ function Call() {
     callState, remoteUser, callDuration, transcripts,
     isMuted, isSpeaking, isListening, debugLog,
     localStream, remoteStream, connectionStatus, speechSupported,
+    interimTranscript,
     endCall, toggleMute, sendTestMessage, setTranslationAudioElement
   } = useCall();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [showDebug, setShowDebug] = useState(false);
   const [testText, setTestText] = useState('');
+  const [muteOriginal, setMuteOriginal] = useState(false);
   const transcriptEndRef = useRef(null);
   const debugEndRef = useRef(null);
   const remoteAudioRef = useRef(null);
@@ -47,6 +49,18 @@ function Call() {
       }
     }
   }, [remoteStream]);
+
+  // Audio Ducking Logic
+  useEffect(() => {
+    if (remoteAudioRef.current) {
+      if (muteOriginal) {
+        remoteAudioRef.current.volume = 0;
+      } else {
+        // Duck volume to 20% when translation is playing
+        remoteAudioRef.current.volume = isSpeaking ? 0.15 : 1.0;
+      }
+    }
+  }, [isSpeaking, muteOriginal]);
 
   useEffect(() => {
     if (localAudioRef.current) {
@@ -168,14 +182,23 @@ function Call() {
           </div>
         )}
 
-        {/* Voice waves */}
+        {/* Voice waves & Interim Transcript */}
         {callState === 'in-call' && (
           <div className="voice-activity-section">
-            <div className={`voice-indicator ${isListening ? 'active' : ''}`}>
-              <div className="voice-waves">
+            <div className={`voice-indicator ${isListening ? 'active' : ''} ${isSpeaking ? 'speaking' : ''}`}>
+              <div className={`voice-waves ${isSpeaking ? 'speaking-waves' : ''}`}>
                 <span></span><span></span><span></span><span></span><span></span>
               </div>
+              <div className="voice-label">
+                {isSpeaking ? `${remoteUser?.name} is speaking...` : isListening ? 'Listening to you...' : 'Mic Off'}
+              </div>
             </div>
+
+            {interimTranscript && (
+              <div className="last-message-preview">
+                <p className="preview-text">{interimTranscript}...</p>
+              </div>
+            )}
           </div>
         )}
 
@@ -234,17 +257,22 @@ function Call() {
 
         {/* Call Controls */}
         <div className="call-controls">
-          <button className={`btn-control ${isMuted ? 'active' : ''}`} onClick={toggleMute}>
+          <button className={`btn-control ${isMuted ? 'active' : ''}`} onClick={toggleMute} title={isMuted ? 'Unmute Mic' : 'Mute Mic'}>
             <span className="control-icon">{isMuted ? '🔇' : '🎤'}</span>
-            <small>{isMuted ? 'Unmute' : 'Mute'}</small>
+            <small>Mic</small>
           </button>
 
-          <button className="btn-control btn-end-call" onClick={handleEndCall}>
+          <button className={`btn-control ${muteOriginal ? 'active' : ''}`} onClick={() => setMuteOriginal(!muteOriginal)} title={muteOriginal ? 'Hear Original Voice' : 'Mute Original Voice'}>
+            <span className="control-icon">{muteOriginal ? '🔕' : '🔊'}</span>
+            <small>Orig.</small>
+          </button>
+
+          <button className="btn-control btn-end-call" onClick={handleEndCall} title="End Call">
             <span className="control-icon">&#9742;</span>
             <small>End</small>
           </button>
 
-          <button className="btn-control" onClick={() => setShowDebug(!showDebug)}>
+          <button className="btn-control" onClick={() => setShowDebug(!showDebug)} title="Debug Log">
             <span className="control-icon">🐛</span>
             <small>Debug</small>
           </button>

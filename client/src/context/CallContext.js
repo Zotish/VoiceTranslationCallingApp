@@ -44,6 +44,7 @@ export function CallProvider({ children }) {
   const [remoteStream, setRemoteStream] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('idle');
   const [speechSupported, setSpeechSupported] = useState(true);
+  const [interimTranscript, setInterimTranscript] = useState('');
 
   const timerRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -474,8 +475,10 @@ export function CallProvider({ children }) {
           processedResultsRef.current = i + 1;
           dispatchTranslation(text, myLang, targetLang, remoteId);
           latestInterim = '';
+          setInterimTranscript('');
         } else {
           latestInterim = text;
+          setInterimTranscript(text);
         }
       }
 
@@ -885,6 +888,7 @@ export function CallProvider({ children }) {
     remoteStream,
     connectionStatus,
     speechSupported,
+    interimTranscript,
     callUser,
     acceptCall,
     rejectCall,

@@ -173,10 +173,11 @@ io.on('connection', (socket) => {
   // Translation + TTS (Cloned Voice > Google TTS fallback)
   socket.on('translate-text', async ({ text, fromLang, toLang, to }) => {
     try {
-      console.log(`🔄 Translate: "${text}" | ${fromLang}→${toLang} | from: ${socket.userId} | to: ${to}`);
+      if (!text || text.trim().length < 2) return;
+
+      console.log(`🔄 [${new Date().toISOString()}] Translate: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}" | ${fromLang}→${toLang}`);
 
       const translated = await translateText(text, fromLang, toLang);
-      console.log(`✅ Translated: "${translated}"`);
 
       let audioBase64 = null;
       let voiceCloned = false;
@@ -190,38 +191,34 @@ io.on('connection', (socket) => {
           if (speaker?.voiceId) {
             speakerVoiceId = speaker.voiceId;
             userVoiceCache.set(socket.userId, speaker.voiceId);
-            console.log(`🎤 Restored cloned voice from DB: ${speaker.voiceId}`);
           }
         } catch (err) {
-          console.error('Voice DB lookup failed:', err.message);
+          console.error(`❌ Voice DB lookup failed for ${socket.userId}:`, err.message);
         }
       }
 
-      if (speakerVoiceId) {
+      if (speakerVoiceId && process.env.ELEVENLABS_API_KEY) {
         try {
-          console.log(`🎤 Using cloned voice: ${speakerVoiceId}`);
           const audioBuffer = await generateSpeech(translated, speakerVoiceId);
           if (audioBuffer) {
             audioBase64 = audioBuffer.toString('base64');
             voiceCloned = true;
             voiceSource = 'clone';
-            console.log(`🔊 Cloned voice audio: ${audioBase64.length} chars`);
           }
         } catch (err) {
-          console.error('Cloned voice failed:', err.message);
+          console.error(`⚠️ Cloned voice failed for ${speakerVoiceId}:`, err.message);
         }
       }
 
-      // 2. Fallback to Google TTS if no cloned voice
+      // 2. Fallback to Google TTS if no cloned voice or it failed
       if (!audioBase64) {
         try {
           audioBase64 = await generateTTS(translated, toLang);
           if (audioBase64) {
             voiceSource = 'tts';
-            console.log(`🔊 Google TTS audio: ${audioBase64.length} chars`);
           }
         } catch (err) {
-          console.error('Google TTS failed:', err.message);
+          console.error(`❌ Google TTS failed for ${toLang}:`, err.message);
         }
       }
 
@@ -240,9 +237,10 @@ io.on('connection', (socket) => {
 
       // Confirmation to sender
       socket.emit('translation-sent', { original: text, translated, fromLang, toLang, voiceSource });
+      console.log(`✅ [${new Date().toISOString()}] Sent translation via ${voiceSource}`);
     } catch (err) {
-      console.error('Translation error:', err);
-      socket.emit('translation-error', { message: 'Translation failed' });
+      console.error('❌ Global Translation Error:', err);
+      socket.emit('translation-error', { message: 'Translation failed. Please check your internet or try again.' });
     }
   });
 
