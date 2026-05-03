@@ -50,16 +50,33 @@ function Call() {
     }
   }, [remoteStream]);
 
-  // Audio Ducking Logic
+  // Audio Ducking Logic with Smooth Transition
   useEffect(() => {
-    if (remoteAudioRef.current) {
-      if (muteOriginal) {
-        remoteAudioRef.current.volume = 0;
-      } else {
-        // Duck volume to 20% when translation is playing
-        remoteAudioRef.current.volume = isSpeaking ? 0.15 : 1.0;
+    if (!remoteAudioRef.current) return;
+
+    const targetVolume = muteOriginal ? 0 : (isSpeaking ? 0.15 : 1.0);
+    const currentVolume = remoteAudioRef.current.volume;
+    
+    if (Math.abs(currentVolume - targetVolume) < 0.01) return;
+
+    // Simple linear fade to prevent "pops"
+    const step = currentVolume < targetVolume ? 0.05 : -0.05;
+    const interval = setInterval(() => {
+      if (!remoteAudioRef.current) {
+        clearInterval(interval);
+        return;
       }
-    }
+      
+      let nextVol = remoteAudioRef.current.volume + step;
+      if ((step > 0 && nextVol >= targetVolume) || (step < 0 && nextVol <= targetVolume)) {
+        remoteAudioRef.current.volume = targetVolume;
+        clearInterval(interval);
+      } else {
+        remoteAudioRef.current.volume = Math.max(0, Math.min(1, nextVol));
+      }
+    }, 30);
+
+    return () => clearInterval(interval);
   }, [isSpeaking, muteOriginal]);
 
   useEffect(() => {

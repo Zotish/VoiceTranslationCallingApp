@@ -80,19 +80,23 @@ export function CallProvider({ children }) {
       if (!AudioContext) return;
 
       const ctx = new AudioContext();
-      const osc = ctx.createOscillator();
+      
+      // Create a 1-second buffer of absolute silence
+      const buffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+      
+      // Connect to destination but at zero volume just in case
       const gain = ctx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(1, ctx.currentTime); // Inaudible frequency
-      gain.gain.setValueAtTime(0.001, ctx.currentTime); // Tiny volume
-
-      osc.connect(gain);
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      
+      source.connect(gain);
       gain.connect(ctx.destination);
-      osc.start();
+      source.start();
 
-      comfortNoiseRef.current = { ctx, osc };
-      addDebug('Silent comfort noise started to keep connection alive');
+      comfortNoiseRef.current = { ctx, source };
+      addDebug('Silent comfort noise active (keeping connection alive)');
     } catch (err) {
       console.warn('Comfort noise failed:', err);
     }
@@ -101,7 +105,7 @@ export function CallProvider({ children }) {
   const stopComfortNoise = useCallback(() => {
     if (comfortNoiseRef.current) {
       try {
-        comfortNoiseRef.current.osc.stop();
+        comfortNoiseRef.current.source.stop();
         comfortNoiseRef.current.ctx.close();
       } catch (err) {
         // ignore
